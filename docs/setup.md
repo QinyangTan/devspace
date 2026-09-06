@@ -99,6 +99,10 @@ Configure the MCP client with the full MCP endpoint:
 https://your-tunnel-host.example.com/mcp
 ```
 
+Protocol compatibility is automatic. DevSpace serves MCP 2026-07-28 requests
+directly and handles older 2025-era clients statelessly on the same endpoint;
+there is no client-protocol setting to maintain.
+
 A Coding Agents-only setup skips this section.
 
 ## Start The Server
