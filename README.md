@@ -253,9 +253,16 @@ Install pnpm 11.25.0, the version pinned in `package.json`, with
 
 ```bash
 pnpm install --frozen-lockfile
+pnpm dev:seed
 pnpm dev
 pnpm typecheck
 pnpm test
 pnpm build
 pnpm start
 ```
+
+`dev:seed` forks your normal DevSpace config and SQLite state into an ignored
+checkout-local `.devspace-dev/` directory so source builds and migrations do not
+modify your normal installation. Use `pnpm dev:reset` to discard that QA state
+and fork it again. See [Development and Manual QA](docs/development.md) for
+worktree switching, ChatGPT, and database-migration workflows.

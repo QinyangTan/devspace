@@ -154,7 +154,10 @@ pinned in `package.json`. Install it with `npm install --global pnpm@11.25.0`.
 
 ```bash
 pnpm install --frozen-lockfile
+pnpm dev:seed
 pnpm dev
 ```
 
-The same setup rules apply.
+The source server uses an ignored checkout-local fork of your normal DevSpace
+configuration and SQLite state. See [Development and Manual QA](development.md)
+for worktree switching, ChatGPT testing, and database migration workflows.
