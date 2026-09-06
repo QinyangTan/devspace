@@ -91,6 +91,25 @@ interface RunningServer {
   close(): Promise<void>;
 }
 
+type TrackToolActivity = <T>(operation: () => Promise<T>) => Promise<T>;
+
+class ToolActivityTracker {
+  private readonly active = new Set<Promise<unknown>>();
+
+  readonly track: TrackToolActivity = <T>(operation: () => Promise<T>): Promise<T> => {
+    const promise = operation();
+    this.active.add(promise);
+    void promise.finally(() => this.active.delete(promise));
+    return promise;
+  };
+
+  async waitForIdle(): Promise<void> {
+    while (this.active.size > 0) {
+      await Promise.allSettled(Array.from(this.active));
+    }
+  }
+}
+
 interface WorkspaceAppManifestEntry {
   file: string;
   css?: string[];
@@ -291,6 +310,7 @@ export function createMcpServer(
   processSessions: ProcessSessionManager,
   resolveLocalAgentProviders: () => LocalAgentProviderStatus[],
   incomingArtifactAdapters: readonly IncomingArtifactAdapter[],
+  trackToolActivity?: TrackToolActivity,
 ): McpServer {
   const toolSurface = getToolSurface(config.toolMode);
   const server = new McpServer(
@@ -308,6 +328,7 @@ export function createMcpServer(
     processSessions,
     resolveLocalAgentProviders,
     incomingArtifactAdapters,
+    trackToolActivity,
   );
   return server;
 }
@@ -320,11 +341,15 @@ function registerMcpSurface(
   processSessions: ProcessSessionManager,
   resolveLocalAgentProviders: () => LocalAgentProviderStatus[],
   incomingArtifactAdapters: readonly IncomingArtifactAdapter[],
+  trackToolActivity?: TrackToolActivity,
 ): void {
+  const registrationTarget = trackToolActivity
+    ? withTrackedToolHandlers(server, trackToolActivity)
+    : server;
   const toolSurface = getToolSurface(config.toolMode);
 
   registerAppResource(
-    server,
+    registrationTarget,
     "DevSpace Diff Card",
     WORKSPACE_APP_URI,
     {
@@ -355,7 +380,7 @@ function registerMcpSurface(
   );
 
   registerAppTool(
-    server,
+    registrationTarget,
     "open_workspace",
     {
       title: "Open workspace",
@@ -562,7 +587,7 @@ function registerMcpSurface(
     },
   );
 
-  server.registerTool(
+  registrationTarget.registerTool(
     toolNames.read,
     {
       title: "Read file",
@@ -644,14 +669,14 @@ function registerMcpSurface(
   );
 
   toolSurface.register({
-    server,
+    server: registrationTarget,
     config,
     workspaces,
     processSessions,
   });
 
   registerAppTool(
-    server,
+    registrationTarget,
     "show_changes",
     {
       title: "Show changes",
@@ -715,12 +740,30 @@ function registerMcpSurface(
   );
 
   if (config.artifactsEnabled && isArtifactDownloadSupportedPlatform()) {
-    registerArtifactTools(server, {
+    registerArtifactTools(registrationTarget, {
       config,
       workspaces,
       incomingArtifactAdapters,
     });
   }
+}
+
+function withTrackedToolHandlers(
+  server: McpRegistrationTarget,
+  trackToolActivity: TrackToolActivity,
+): McpRegistrationTarget {
+  return {
+    registerTool: ((...args: unknown[]) => {
+      const handler = args.at(-1) as (...handlerArgs: unknown[]) => unknown;
+      return (server.registerTool as (...callArgs: unknown[]) => unknown)(
+        ...args.slice(0, -1),
+        (...handlerArgs: unknown[]) => trackToolActivity(
+          () => Promise.resolve(handler(...handlerArgs)),
+        ),
+      );
+    }) as McpRegistrationTarget["registerTool"],
+    registerResource: server.registerResource.bind(server),
+  };
 }
 
 export interface CreateServerOptions {
@@ -752,6 +795,7 @@ export function createServer(
   const workspaces = new WorkspaceRegistry(config, workspaceStore);
   const reviewCheckpoints = createReviewCheckpointManager();
   const processSessions = new ProcessSessionManager();
+  const toolActivities = new ToolActivityTracker();
   const localAgentProviders = buildLocalAgentProviderStatuses(
     config.subagents,
     getLocalAgentProviderAvailabilitySnapshot(),
@@ -770,6 +814,7 @@ export function createServer(
       processSessions,
       resolveLocalAgentProviders,
       incomingArtifactAdapters,
+      toolActivities.track,
     );
   });
   const mcpHandler = createMcpHandler(() => {
@@ -901,6 +946,7 @@ export function createServer(
             error: error instanceof Error ? error.message : String(error),
           });
         }
+        await toolActivities.waitForIdle();
         processSessions.shutdown();
         oauthProvider.close();
         workspaceStore.close?.();
