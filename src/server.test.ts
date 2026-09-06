@@ -288,7 +288,7 @@ test("open_workspace scopes checkout reuse to OpenAI session metadata", async (t
   assert.ok(Array.isArray(structuredContent(unscoped).agentsFiles));
 });
 
-test("HTTP endpoint serves modern MCP while preserving legacy sessions", async (t) => {
+test("HTTP endpoint serves modern MCP and stateless legacy clients", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "devspace-modern-http-test-"));
   const ownerToken = "test-owner-token-that-is-long-enough";
   const env = writeTestDevspaceConfig(join(root, ".config"), {
@@ -368,9 +368,27 @@ test("HTTP endpoint serves modern MCP while preserving legacy sessions", async (
   );
   assert.equal(called.status, 200, await called.clone().text());
   const callBody = await called.json() as {
-    result?: { structuredContent?: { workspaceId?: string } };
+    result?: { structuredContent?: { workspaceId?: string; agentsFiles?: unknown[] } };
   };
-  assert.equal(typeof callBody.result?.structuredContent?.workspaceId, "string");
+  const workspaceId = callBody.result?.structuredContent?.workspaceId;
+  assert.equal(typeof workspaceId, "string");
+
+  const repeated = await postModernMcp(
+    localBaseUrl,
+    accessToken,
+    "tools/call",
+    {
+      name: "open_workspace",
+      arguments: { path: root },
+      _meta: { "openai/session": "modern-http-test" },
+    },
+  );
+  assert.equal(repeated.status, 200, await repeated.clone().text());
+  const repeatedBody = await repeated.json() as {
+    result?: { structuredContent?: { workspaceId?: string; agentsFiles?: unknown[] } };
+  };
+  assert.equal(repeatedBody.result?.structuredContent?.workspaceId, workspaceId);
+  assert.equal(repeatedBody.result?.structuredContent?.agentsFiles, undefined);
 
   const legacy = await fetch(`${localBaseUrl}/mcp`, {
     method: "POST",
@@ -391,8 +409,26 @@ test("HTTP endpoint serves modern MCP while preserving legacy sessions", async (
     }),
   });
   assert.equal(legacy.status, 200, await legacy.clone().text());
-  assert.ok(legacy.headers.get("mcp-session-id"));
+  assert.equal(legacy.headers.get("mcp-session-id"), null);
   assert.match(await legacy.text(), /"protocolVersion"/);
+
+  const legacyTools = await fetch(`${localBaseUrl}/mcp`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${accessToken}`,
+      "content-type": "application/json",
+      accept: "application/json, text/event-stream",
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: "legacy-tools-list",
+      method: "tools/list",
+      params: {},
+    }),
+  });
+  assert.equal(legacyTools.status, 200, await legacyTools.clone().text());
+  assert.equal(legacyTools.headers.get("mcp-session-id"), null);
+  assert.match(await legacyTools.text(), /"open_workspace"/);
 });
 
 interface ServerFixture {
