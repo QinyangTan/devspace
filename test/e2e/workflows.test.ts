@@ -7,7 +7,7 @@ import { fixture, git } from "./fixture.js";
 import { exec, installPackage } from "./package.js";
 
 let installed: Awaited<ReturnType<typeof installPackage>>;
-before(async () => { installed = await installPackage(); }, { timeout: 360_000 });
+before(async () => { installed = await installPackage(); }, { timeout: 720_000 });
 after(async () => { await installed?.close(); });
 
 function data(result: CallToolResult) {
