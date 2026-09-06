@@ -140,5 +140,12 @@ Actions trusted publisher using:
 The workflow uses a GitHub-hosted runner, requests `id-token: write`, and pins an
 npm CLI new enough for trusted publishing. Its package artifact is also attached
 to a draft GitHub release before npm publication; the GitHub release is made
-public only after npm succeeds. Re-running the same version reuses the matching
-release/tag and skips npm publication when that version already exists.
+public only after npm succeeds.
+
+Re-running the same version is safe only when it still identifies the same
+artifact. Existing npm versions must have the same package integrity as the
+newly packed tarball. Existing draft GitHub releases may be resumed, but public
+releases are never modified: the workflow verifies both npm integrity and the
+published GitHub tarball and exits successfully only when they already match.
+Any partial or mismatched public release fails for manual investigation instead
+of rewriting published state.

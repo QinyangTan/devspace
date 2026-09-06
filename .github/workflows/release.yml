@@ -126,16 +126,82 @@ jobs:
           mkdir -p .release
           filename="$(npm pack --silent --pack-destination .release | tail -n 1)"
           test -n "$filename"
-          echo "tarball=.release/$filename" >> "$GITHUB_OUTPUT"
+          tarball=".release/$filename"
+          integrity="sha512-$(openssl dgst -sha512 -binary "$tarball" | openssl base64 -A)"
+          echo "filename=$filename" >> "$GITHUB_OUTPUT"
+          echo "tarball=$tarball" >> "$GITHUB_OUTPUT"
+          echo "integrity=$integrity" >> "$GITHUB_OUTPUT"
+
+      - name: Inspect existing publication
+        id: publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag }}
+          TARBALL: ${{ steps.pack.outputs.tarball }}
+          FILENAME: ${{ steps.pack.outputs.filename }}
+          LOCAL_INTEGRITY: ${{ steps.pack.outputs.integrity }}
+          IS_PRERELEASE: ${{ steps.release.outputs.prerelease }}
+        run: |
+          package_name="$(node -p 'require("./package.json").name')"
+          npm_exists=false
+          if npm_integrity="$(npm view "$package_name@$VERSION" dist.integrity 2>/dev/null)"; then
+            if [[ -z "$npm_integrity" || "$npm_integrity" != "$LOCAL_INTEGRITY" ]]; then
+              echo "$package_name@$VERSION already exists on npm with different integrity." >&2
+              exit 1
+            fi
+            npm_exists=true
+          fi
+
+          release_exists=false
+          release_draft=false
+          complete=false
+          if release_json="$(gh release view "$TAG" --json isDraft,isPrerelease,targetCommitish 2>/dev/null)"; then
+            release_exists=true
+            release_draft="$(jq -r .isDraft <<<"$release_json")"
+            release_prerelease="$(jq -r .isPrerelease <<<"$release_json")"
+            release_target="$(jq -r .targetCommitish <<<"$release_json")"
+            if [[ "$release_target" != "$GITHUB_SHA" ]]; then
+              echo "$TAG already targets $release_target instead of $GITHUB_SHA." >&2
+              exit 1
+            fi
+            if [[ "$release_draft" != "true" ]]; then
+              if [[ "$release_prerelease" != "$IS_PRERELEASE" ]]; then
+                echo "$TAG is already public with the wrong prerelease state." >&2
+                exit 1
+              fi
+              if [[ "$npm_exists" != "true" ]]; then
+                echo "$TAG is already public on GitHub but $package_name@$VERSION is missing from npm." >&2
+                exit 1
+              fi
+
+              mkdir -p .release/existing
+              if ! gh release download "$TAG" --pattern "$FILENAME" --dir .release/existing --clobber; then
+                echo "$TAG is already public but its release artifact could not be verified." >&2
+                exit 1
+              fi
+              if ! cmp --silent "$TARBALL" ".release/existing/$FILENAME"; then
+                echo "$TAG is already public with a different release artifact." >&2
+                exit 1
+              fi
+              complete=true
+            fi
+          fi
+
+          echo "npm_exists=$npm_exists" >> "$GITHUB_OUTPUT"
+          echo "release_exists=$release_exists" >> "$GITHUB_OUTPUT"
+          echo "release_draft=$release_draft" >> "$GITHUB_OUTPUT"
+          echo "complete=$complete" >> "$GITHUB_OUTPUT"
 
       - name: Prepare draft GitHub release
+        if: steps.publication.outputs.complete != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.release.outputs.tag }}
           IS_PRERELEASE: ${{ steps.release.outputs.prerelease }}
+          RELEASE_EXISTS: ${{ steps.publication.outputs.release_exists }}
         run: |
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Reusing existing GitHub release $TAG."
+          if [[ "$RELEASE_EXISTS" == "true" ]]; then
+            echo "Reusing existing draft GitHub release $TAG."
           else
             args=(release create "$TAG" --draft --title "$TAG" --target "$GITHUB_SHA" --generate-notes)
             if [[ "$IS_PRERELEASE" == "true" ]]; then
@@ -145,6 +211,7 @@ jobs:
           fi
 
       - name: Upload release artifact
+        if: steps.publication.outputs.complete != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.release.outputs.tag }}
@@ -152,24 +219,21 @@ jobs:
         run: gh release upload "$TAG" "$TARBALL" --clobber
 
       - name: Setup npm trusted publishing
+        if: steps.publication.outputs.complete != 'true' && steps.publication.outputs.npm_exists != 'true'
         run: |
           npm install --global npm@11.8.0
           npm config set registry https://registry.npmjs.org/
           npm --version
 
       - name: Publish npm package
+        if: steps.publication.outputs.complete != 'true' && steps.publication.outputs.npm_exists != 'true'
         env:
           NPM_TAG: ${{ steps.release.outputs.npm_tag }}
           TARBALL: ${{ steps.pack.outputs.tarball }}
-        run: |
-          package_name="$(node -p 'require("./package.json").name')"
-          if published="$(npm view "$package_name@$VERSION" version 2>/dev/null)" && [[ "$published" == "$VERSION" ]]; then
-            echo "$package_name@$VERSION is already published; skipping npm publish."
-          else
-            npm publish "$TARBALL" --access public --tag "$NPM_TAG" --provenance
-          fi
+        run: npm publish "$TARBALL" --access public --tag "$NPM_TAG" --provenance
 
       - name: Publish GitHub release
+        if: steps.publication.outputs.complete != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.release.outputs.tag }}
