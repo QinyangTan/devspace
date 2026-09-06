@@ -289,39 +289,9 @@ test("open_workspace scopes checkout reuse to OpenAI session metadata", async (t
 });
 
 test("HTTP endpoint serves modern MCP and stateless legacy clients", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "devspace-modern-http-test-"));
-  const ownerToken = "test-owner-token-that-is-long-enough";
-  const env = writeTestDevspaceConfig(join(root, ".config"), {
-    server: {
-      port: 1,
-      publicBaseUrl: "https://example.test",
-    },
-    workspaces: {
-      allowedRoots: [root],
-      worktreeRoot: join(root, ".worktrees"),
-    },
-    storage: { stateDir: join(root, ".state") },
-  });
-  const config = loadConfig(env);
-  const running = createServer(config, { incomingArtifactAdapters: [] });
-  const httpServer = running.app.listen(0, "127.0.0.1");
-  await new Promise<void>((resolve) => httpServer.once("listening", resolve));
-
-  t.after(async () => {
-    await new Promise<void>((resolve, reject) => {
-      httpServer.close((error) => error ? reject(error) : resolve());
-    });
-    await running.close();
-    await rm(root, { recursive: true, force: true });
-  });
-
-  const address = httpServer.address();
-  assert.ok(address && typeof address === "object");
-  const localBaseUrl = `http://127.0.0.1:${address.port}`;
-  const accessToken = await issueTestAccessToken(
-    localBaseUrl,
-    config.publicBaseUrl,
-    ownerToken,
+  const { root, localBaseUrl, accessToken } = await httpServerFixture(
+    t,
+    "devspace-modern-http-test-",
   );
 
   const unauthenticated = await postModernMcp(
@@ -432,37 +402,9 @@ test("HTTP endpoint serves modern MCP and stateless legacy clients", async (t) =
 });
 
 test("server shutdown waits for an active MCP tool call", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "devspace-shutdown-test-"));
-  const ownerToken = "test-owner-token-that-is-long-enough";
-  const env = writeTestDevspaceConfig(join(root, ".config"), {
-    server: {
-      port: 1,
-      publicBaseUrl: "https://example.test",
-    },
-    workspaces: {
-      allowedRoots: [root],
-      worktreeRoot: join(root, ".worktrees"),
-    },
-    storage: { stateDir: join(root, ".state") },
-  });
-  const config = loadConfig(env);
-  const running = createServer(config, { incomingArtifactAdapters: [] });
-  const httpServer = running.app.listen(0, "127.0.0.1");
-  await new Promise<void>((resolve) => httpServer.once("listening", resolve));
-
-  t.after(async () => {
-    await new Promise<void>((resolve) => httpServer.close(() => resolve()));
-    await running.close();
-    await rm(root, { recursive: true, force: true });
-  });
-
-  const address = httpServer.address();
-  assert.ok(address && typeof address === "object");
-  const localBaseUrl = `http://127.0.0.1:${address.port}`;
-  const accessToken = await issueTestAccessToken(
-    localBaseUrl,
-    config.publicBaseUrl,
-    ownerToken,
+  const { root, localBaseUrl, accessToken, running } = await httpServerFixture(
+    t,
+    "devspace-shutdown-test-",
   );
   const opened = await postModernMcp(
     localBaseUrl,
@@ -516,6 +458,53 @@ test("server shutdown waits for an active MCP tool call", async (t) => {
 interface ServerFixture {
   client: Client;
   project: string;
+}
+
+interface HttpServerFixture {
+  root: string;
+  localBaseUrl: string;
+  accessToken: string;
+  running: ReturnType<typeof createServer>;
+}
+
+async function httpServerFixture(
+  t: TestContext,
+  prefix: string,
+): Promise<HttpServerFixture> {
+  const root = await mkdtemp(join(tmpdir(), prefix));
+  const ownerToken = "test-owner-token-that-is-long-enough";
+  const config = loadConfig(writeTestDevspaceConfig(join(root, ".config"), {
+    server: {
+      port: 1,
+      publicBaseUrl: "https://example.test",
+    },
+    workspaces: {
+      allowedRoots: [root],
+      worktreeRoot: join(root, ".worktrees"),
+    },
+    storage: { stateDir: join(root, ".state") },
+  }));
+  const running = createServer(config, { incomingArtifactAdapters: [] });
+  const httpServer = running.app.listen(0, "127.0.0.1");
+  await new Promise<void>((resolve) => httpServer.once("listening", resolve));
+
+  t.after(async () => {
+    await new Promise<void>((resolve, reject) => {
+      httpServer.close((error) => error ? reject(error) : resolve());
+    });
+    await running.close();
+    await rm(root, { recursive: true, force: true });
+  });
+
+  const address = httpServer.address();
+  assert.ok(address && typeof address === "object");
+  const localBaseUrl = `http://127.0.0.1:${address.port}`;
+  const accessToken = await issueTestAccessToken(
+    localBaseUrl,
+    config.publicBaseUrl,
+    ownerToken,
+  );
+  return { root, localBaseUrl, accessToken, running };
 }
 
 async function fixture(
