@@ -192,24 +192,27 @@ test("workspace cache evicts old contexts without losing advertised skill reads"
   ));
 
   const store = new SqliteWorkspaceStore(stateDir);
-  t.after(() => store.close());
-  const registry = new WorkspaceRegistry(config, store);
-  const first = await registry.openWorkspace(context.root);
-  assert.equal(
-    registry.resolveReadPath(first.workspace, resourceFile).absolutePath,
-    resourceFile,
-  );
+  try {
+    const registry = new WorkspaceRegistry(config, store);
+    const first = await registry.openWorkspace(context.root);
+    assert.equal(
+      registry.resolveReadPath(first.workspace, resourceFile).absolutePath,
+      resourceFile,
+    );
 
-  for (let index = 0; index < 32; index += 1) {
-    await registry.openWorkspace(context.root);
+    for (let index = 0; index < 32; index += 1) {
+      await registry.openWorkspace(context.root);
+    }
+
+    const restored = registry.getWorkspace(first.workspace.id);
+    assert.notEqual(restored, first.workspace);
+    assert.equal(
+      registry.resolveReadPath(restored, resourceFile).absolutePath,
+      resourceFile,
+    );
+  } finally {
+    store.close();
   }
-
-  const restored = registry.getWorkspace(first.workspace.id);
-  assert.notEqual(restored, first.workspace);
-  assert.equal(
-    registry.resolveReadPath(restored, resourceFile).absolutePath,
-    resourceFile,
-  );
 });
 
 test("workspace paths outside the allowed roots are rejected", async (t) => {
