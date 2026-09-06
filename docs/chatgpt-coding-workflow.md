@@ -137,8 +137,7 @@ advertised `SKILL.md` before following that skill.
 
 Skill paths may be outside the workspace. DevSpace only permits reading:
 
-- advertised `SKILL.md` files
-- files under a skill directory after that skill's `SKILL.md` has been read
+- files within advertised skill directories
 
 Set `skills.enabled` to `false` to hide skills from workspace output. Enable
 Subagents and choose providers through `devspace init` or the persisted provider

@@ -18,7 +18,6 @@ import {
 } from "./roots.js";
 import {
   loadWorkspaceSkills,
-  markSkillActivated,
   resolveSkillReadPath,
   type LoadedSkills,
   type SkillReadResolution,
@@ -55,7 +54,6 @@ export interface Workspace {
   skills: LoadedSkills["skills"];
   skillDiagnostics: LoadedSkills["diagnostics"];
   agentProfiles: LocalAgentProfile[];
-  activatedSkillDirs: Set<string>;
 }
 
 export interface WorkspaceContext {
@@ -89,6 +87,8 @@ type DirectoryOps = {
   stat: (path: string) => Promise<PathStats>;
   mkdir: (path: string, options: { recursive: true }) => Promise<unknown>;
 };
+
+const MAX_CACHED_WORKSPACES = 32;
 
 export class WorkspaceRegistry {
   private readonly workspaces = new Map<string, Workspace>();
@@ -247,6 +247,8 @@ export class WorkspaceRegistry {
   getWorkspace(workspaceId: string): Workspace {
     const workspace = this.workspaces.get(workspaceId);
     if (workspace) {
+      this.workspaces.delete(workspaceId);
+      this.workspaces.set(workspaceId, workspace);
       this.store?.touchSession(workspaceId);
       return workspace;
     }
@@ -277,10 +279,9 @@ export class WorkspaceRegistry {
           : undefined,
       ...this.loadSkillsForWorkspace(root),
       agentProfiles: [],
-      activatedSkillDirs: new Set(),
     };
     this.store?.touchSession(workspaceId);
-    this.workspaces.set(restoredWorkspace.id, restoredWorkspace);
+    this.rememberWorkspace(restoredWorkspace);
 
     return restoredWorkspace;
   }
@@ -303,7 +304,6 @@ export class WorkspaceRegistry {
     } catch (workspaceError) {
       const skillRead = resolveSkillReadPath(
         workspace.skills,
-        workspace.activatedSkillDirs,
         inputPath,
       );
       if (!skillRead) throw workspaceError;
@@ -313,12 +313,6 @@ export class WorkspaceRegistry {
         readRoots: [workspace.root, skillRead.skill.baseDir],
         skillRead,
       };
-    }
-  }
-
-  markReadPathLoaded(workspace: Workspace, readPath: WorkspaceReadPath): void {
-    if (readPath.skillRead?.isSkillFile) {
-      markSkillActivated(workspace.activatedSkillDirs, readPath.skillRead.skill);
     }
   }
 
@@ -366,7 +360,6 @@ export class WorkspaceRegistry {
       worktree: input.worktree,
       ...this.loadSkillsForWorkspace(input.root),
       agentProfiles: await loadLocalAgentProfiles(this.config, input.root),
-      activatedSkillDirs: new Set(),
     };
 
     this.store?.createSession({
@@ -378,7 +371,7 @@ export class WorkspaceRegistry {
       baseSha: workspace.worktree?.baseSha,
       managed: workspace.worktree?.managed,
     });
-    this.workspaces.set(workspace.id, workspace);
+    this.rememberWorkspace(workspace);
     const agentsFiles = await this.loadInitialAgentsFiles(workspace.root);
     const availableAgentsFiles = await this.findAvailableAgentsFiles(workspace.root, agentsFiles);
 
@@ -389,6 +382,18 @@ export class WorkspaceRegistry {
       workspaceReused: false,
       includeBootstrapContext: true,
     };
+  }
+
+  private rememberWorkspace(workspace: Workspace): void {
+    this.workspaces.delete(workspace.id);
+    this.workspaces.set(workspace.id, workspace);
+
+    if (!this.store) return;
+    while (this.workspaces.size > MAX_CACHED_WORKSPACES) {
+      const oldestWorkspaceId = this.workspaces.keys().next().value as string | undefined;
+      if (!oldestWorkspaceId) break;
+      this.workspaces.delete(oldestWorkspaceId);
+    }
   }
 
   private loadSkillsForWorkspace(root: string): Pick<Workspace, "skills" | "skillDiagnostics"> {
