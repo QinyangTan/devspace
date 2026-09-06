@@ -95,3 +95,50 @@ pnpm typecheck
 pnpm test
 pnpm build
 ```
+
+## Releases
+
+Releases are published by the manual `Release` GitHub Actions workflow. Do not
+publish the package directly from a development checkout for normal releases.
+The workflow only accepts runs dispatched from `main`, and the exact commit must
+already have a successful `CI` push run.
+
+Prereleases use the `beta` npm dist-tag. Both beta and release-candidate
+versions follow the same install channel:
+
+```text
+1.1.0-beta.1 -> @beta
+1.1.0-beta.2 -> @beta
+1.1.0-rc.1   -> @beta
+1.1.0        -> @latest
+```
+
+Run the workflow from GitHub Actions and enter the version without a leading
+`v`, for example `1.1.0-beta.1`. The workflow temporarily writes prerelease
+versions into `package.json`, validates and packs that exact source commit,
+publishes the resulting tarball to npm, and then publishes the matching GitHub
+release. Prerelease version changes are not committed back to `main`.
+
+Stable releases are different: `package.json` must already contain the stable
+version being published. Land that normal version update on `main`, let CI pass,
+then dispatch the Release workflow with the same version. This keeps the source
+tree aligned with the latest stable release without creating version commits for
+every beta or release candidate.
+
+### npm trusted publishing setup
+
+The release workflow authenticates to npm through GitHub Actions OIDC instead of
+a long-lived npm token. Configure `@waishnav/devspace` on npm with a GitHub
+Actions trusted publisher using:
+
+- repository owner: `Waishnav`
+- repository: `devspace`
+- workflow filename: `release.yml`
+- no GitHub environment
+- allow direct `npm publish`
+
+The workflow uses a GitHub-hosted runner, requests `id-token: write`, and pins an
+npm CLI new enough for trusted publishing. Its package artifact is also attached
+to a draft GitHub release before npm publication; the GitHub release is made
+public only after npm succeeds. Re-running the same version reuses the matching
+release/tag and skips npm publication when that version already exists.
