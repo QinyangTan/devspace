@@ -56,11 +56,14 @@ try {
   await assert.rejects(runDevState("reset"), /No auth\.json found/);
 
   const preservedDatabase = new Database(localDatabasePath, { readonly: true });
-  assert.deepEqual(
-    preservedDatabase.prepare("select value from marker order by rowid").pluck().all(),
-    ["source", "local-only"],
-  );
-  preservedDatabase.close();
+  try {
+    assert.deepEqual(
+      preservedDatabase.prepare("select value from marker order by rowid").pluck().all(),
+      ["source", "local-only"],
+    );
+  } finally {
+    preservedDatabase.close();
+  }
 
   await writeFile(join(sourceConfigDir, "auth.json"), JSON.stringify({
     ownerToken: "test-owner-token-that-is-long-enough",
