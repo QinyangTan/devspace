@@ -223,7 +223,15 @@ jobs:
         run: |
           npm install --global npm@11.8.0
           npm config set registry https://registry.npmjs.org/
-          npm --version
+          node_version="$(node -p 'process.versions.node')"
+          npm_version="$(npm --version)"
+          echo "Node.js $node_version"
+          echo "npm $npm_version"
+          node -e 'const [major, minor] = process.versions.node.split(".").map(Number); if (major < 22 || (major === 22 && minor < 14)) process.exit(1)'
+          if [[ "$npm_version" != "11.8.0" ]]; then
+            echo "Expected npm 11.8.0 for trusted publishing; resolved npm $npm_version." >&2
+            exit 1
+          fi
 
       - name: Publish npm package
         if: steps.publication.outputs.complete != 'true' && steps.publication.outputs.npm_exists != 'true'
