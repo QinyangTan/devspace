@@ -99,7 +99,8 @@ class ToolActivityTracker {
   readonly track: TrackToolActivity = <T>(operation: () => Promise<T>): Promise<T> => {
     const promise = operation();
     this.active.add(promise);
-    void promise.finally(() => this.active.delete(promise));
+    const remove = () => this.active.delete(promise);
+    void promise.then(remove, remove);
     return promise;
   };
 
