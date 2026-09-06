@@ -4,11 +4,12 @@ import {
   cp,
   mkdir,
   readFile,
+  rename,
   rm,
   writeFile,
 } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import Database from "better-sqlite3";
 import { parse, type ParseError } from "jsonc-parser";
 import { migrateLegacyConfig } from "../src/config-migration.js";
@@ -18,14 +19,12 @@ import { expandHomePath } from "../src/roots.js";
 
 const checkoutRoot = resolve(process.cwd());
 const devRoot = join(checkoutRoot, ".devspace-dev");
-const devConfigDir = join(devRoot, "config");
-const devStateDir = join(devRoot, "state");
 
 export async function seedDevState({ reset = false }: { reset?: boolean } = {}): Promise<void> {
   const sourceConfigDir = resolve(
     expandHomePath(process.env.DEVSPACE_CONFIG_DIR ?? join(homedir(), ".devspace")),
   );
-  if (sourceConfigDir === devConfigDir || sourceConfigDir.startsWith(`${devRoot}/`)) {
+  if (isWithin(devRoot, sourceConfigDir)) {
     throw new Error("Refusing to seed development state from this checkout's own .devspace-dev directory.");
   }
 
@@ -37,41 +36,77 @@ export async function seedDevState({ reset = false }: { reset?: boolean } = {}):
     throw new Error("Development state is already initialized. Run `pnpm dev:reset` to replace it.");
   }
 
-  if (reset) await rm(devRoot, { recursive: true, force: true });
-  await mkdir(devConfigDir, { recursive: true });
-  await mkdir(devStateDir, { recursive: true });
+  const stagingRoot = `${devRoot}.staging-${process.pid}-${Date.now()}`;
+  const stagingConfigDir = join(stagingRoot, "config");
+  const stagingStateDir = join(stagingRoot, "state");
+  const devConfigDir = join(devRoot, "config");
+  const devStateDir = join(devRoot, "state");
 
-  const localConfig: DevspaceConfig = {
-    ...source.config,
-    storage: {
-      ...source.config.storage,
-      stateDir: devStateDir,
-    },
-  };
-  const localConfigPath = join(devConfigDir, "config.jsonc");
-  await writeFile(localConfigPath, `${JSON.stringify(localConfig, null, 2)}\n`, { mode: 0o600 });
+  try {
+    await mkdir(stagingConfigDir, { recursive: true });
+    await mkdir(stagingStateDir, { recursive: true });
 
-  const sourceAuthPath = join(sourceConfigDir, "auth.json");
-  if (existsSync(sourceAuthPath)) {
-    const localAuthPath = join(devConfigDir, "auth.json");
-    await cp(sourceAuthPath, localAuthPath);
-    await chmod(localAuthPath, 0o600);
-  } else if (!process.env.DEVSPACE_OAUTH_OWNER_TOKEN) {
-    throw new Error(`No auth.json found in ${sourceConfigDir}. Run DevSpace setup before seeding development state.`);
-  }
+    const localConfig: DevspaceConfig = {
+      ...source.config,
+      storage: {
+        ...source.config.storage,
+        stateDir: devStateDir,
+      },
+    };
+    const localConfigPath = join(stagingConfigDir, "config.jsonc");
+    await writeFile(localConfigPath, `${JSON.stringify(localConfig, null, 2)}\n`, { mode: 0o600 });
 
-  for (const directory of ["skills", "agents"] as const) {
-    const sourceDirectory = join(sourceConfigDir, directory);
-    if (existsSync(sourceDirectory)) {
-      await cp(sourceDirectory, join(devConfigDir, directory), { recursive: true });
+    const sourceAuthPath = join(sourceConfigDir, "auth.json");
+    if (existsSync(sourceAuthPath)) {
+      const localAuthPath = join(stagingConfigDir, "auth.json");
+      await cp(sourceAuthPath, localAuthPath);
+      await chmod(localAuthPath, 0o600);
+    } else if (!process.env.DEVSPACE_OAUTH_OWNER_TOKEN) {
+      throw new Error(`No auth.json found in ${sourceConfigDir}. Run DevSpace setup before seeding development state.`);
     }
-  }
 
-  if (existsSync(sourceDatabasePath)) {
-    await backupDatabase(sourceDatabasePath, databasePath(devStateDir));
+    for (const directory of ["skills", "agents"] as const) {
+      const sourceDirectory = join(sourceConfigDir, directory);
+      if (existsSync(sourceDirectory)) {
+        await cp(sourceDirectory, join(stagingConfigDir, directory), { recursive: true });
+      }
+    }
+
+    if (existsSync(sourceDatabasePath)) {
+      await backupDatabase(sourceDatabasePath, databasePath(stagingStateDir));
+    }
+
+    await promoteStagedState(stagingRoot, reset);
+  } finally {
+    await rm(stagingRoot, { recursive: true, force: true });
   }
 
   console.log(`${reset ? "Reset" : "Seeded"} development state in ${devRoot}`);
+}
+
+async function promoteStagedState(stagingRoot: string, reset: boolean): Promise<void> {
+  if (!reset || !existsSync(devRoot)) {
+    await rename(stagingRoot, devRoot);
+    return;
+  }
+
+  const previousRoot = `${devRoot}.previous-${process.pid}-${Date.now()}`;
+  await rename(devRoot, previousRoot);
+  try {
+    await rename(stagingRoot, devRoot);
+  } catch (error) {
+    await rename(previousRoot, devRoot);
+    throw error;
+  }
+  await rm(previousRoot, { recursive: true, force: true });
+}
+
+function isWithin(parent: string, candidate: string): boolean {
+  const pathFromParent = relative(parent, candidate);
+  return pathFromParent === ""
+    || (pathFromParent !== ".."
+      && !pathFromParent.startsWith(`..${sep}`)
+      && !isAbsolute(pathFromParent));
 }
 
 async function readSourceConfig(configDir: string): Promise<{ config: DevspaceConfig }> {

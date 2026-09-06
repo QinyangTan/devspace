@@ -25,7 +25,8 @@ seeded, it stops with an instruction to run `pnpm dev:seed` instead of silently
 falling back to your normal DevSpace state.
 
 By default the seed source is `~/.devspace`. If your normal installation uses a
-custom `DEVSPACE_CONFIG_DIR`, run `dev:seed` with the same environment value.
+custom `DEVSPACE_CONFIG_DIR`, keep that value exported while using `dev:seed`
+and `dev:reset` so both commands fork the same installation.
 
 ## Testing with ChatGPT
 

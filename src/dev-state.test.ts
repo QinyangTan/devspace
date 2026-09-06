@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,9 +12,11 @@ const checkoutRoot = join(root, "checkout");
 const sourceConfigDir = join(root, "config");
 const sourceStateDir = join(root, "state");
 const scriptPath = fileURLToPath(new URL("../scripts/dev-state.ts", import.meta.url));
+const tsxCliPath = fileURLToPath(import.meta.resolve("tsx/cli"));
 
 try {
   await mkdir(checkoutRoot, { recursive: true });
+  const canonicalCheckoutRoot = await realpath(checkoutRoot);
   await mkdir(join(sourceConfigDir, "skills", "example"), { recursive: true });
   await mkdir(sourceStateDir, { recursive: true });
   await writeFile(join(sourceConfigDir, "config.jsonc"), JSON.stringify({
@@ -36,7 +38,7 @@ try {
   const localConfig = JSON.parse(
     await readFile(join(devRoot, "config", "config.jsonc"), "utf8"),
   ) as { storage: { stateDir: string } };
-  assert.equal(localConfig.storage.stateDir, join(devRoot, "state"));
+  assert.equal(localConfig.storage.stateDir, join(canonicalCheckoutRoot, ".devspace-dev", "state"));
   assert.equal(existsSync(join(devRoot, "config", "auth.json")), true);
   assert.equal(existsSync(join(devRoot, "config", "skills", "example", "SKILL.md")), true);
 
@@ -47,6 +49,20 @@ try {
   localDatabase.close();
 
   await assert.rejects(runDevState("seed"), /already initialized/);
+
+  await rm(join(sourceConfigDir, "auth.json"));
+  await assert.rejects(runDevState("reset"), /No auth\.json found/);
+
+  const preservedDatabase = new Database(localDatabasePath, { readonly: true });
+  assert.deepEqual(
+    preservedDatabase.prepare("select value from marker order by rowid").pluck().all(),
+    ["source", "local-only"],
+  );
+  preservedDatabase.close();
+
+  await writeFile(join(sourceConfigDir, "auth.json"), JSON.stringify({
+    ownerToken: "test-owner-token-that-is-long-enough",
+  }));
   await runDevState("reset");
 
   const resetDatabase = new Database(localDatabasePath, { readonly: true });
@@ -61,11 +77,15 @@ console.log("dev state tests passed");
 async function runDevState(command: "seed" | "reset"): Promise<void> {
   return new Promise((resolve, reject) => {
     const child = spawn(
-      "tsx",
-      [scriptPath, command],
+      process.execPath,
+      [tsxCliPath, scriptPath, command],
       {
         cwd: checkoutRoot,
-        env: { ...process.env, DEVSPACE_CONFIG_DIR: sourceConfigDir },
+        env: {
+          ...process.env,
+          DEVSPACE_CONFIG_DIR: sourceConfigDir,
+          DEVSPACE_OAUTH_OWNER_TOKEN: "",
+        },
         stdio: ["ignore", "pipe", "pipe"],
       },
     );
