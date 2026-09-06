@@ -143,9 +143,10 @@ to a draft GitHub release before npm publication; the GitHub release is made
 public only after npm succeeds.
 
 Re-running the same version is safe only when it still identifies the same
-artifact. Existing npm versions must have the same package integrity as the
-newly packed tarball. Existing draft GitHub releases may be resumed, but public
-releases are never modified: the workflow verifies both npm integrity and the
+artifact and release channel. Existing npm versions must have the same package
+integrity as the newly packed tarball and already be assigned to the requested
+`beta` or `latest` dist-tag. Existing draft GitHub releases may be resumed, but
+public releases are never modified: the workflow verifies npm state and the
 published GitHub tarball and exits successfully only when they already match.
 Any partial or mismatched public release fails for manual investigation instead
 of rewriting published state.

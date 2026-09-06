@@ -141,12 +141,18 @@ jobs:
           FILENAME: ${{ steps.pack.outputs.filename }}
           LOCAL_INTEGRITY: ${{ steps.pack.outputs.integrity }}
           IS_PRERELEASE: ${{ steps.release.outputs.prerelease }}
+          NPM_TAG: ${{ steps.release.outputs.npm_tag }}
         run: |
           package_name="$(node -p 'require("./package.json").name')"
           npm_exists=false
           if npm_integrity="$(npm view "$package_name@$VERSION" dist.integrity 2>/dev/null)"; then
             if [[ -z "$npm_integrity" || "$npm_integrity" != "$LOCAL_INTEGRITY" ]]; then
               echo "$package_name@$VERSION already exists on npm with different integrity." >&2
+              exit 1
+            fi
+            published_channel="$(npm view "$package_name" "dist-tags.$NPM_TAG" 2>/dev/null || true)"
+            if [[ "$published_channel" != "$VERSION" ]]; then
+              echo "$package_name@$VERSION exists on npm but @$NPM_TAG points to ${published_channel:-nothing}." >&2
               exit 1
             fi
             npm_exists=true
