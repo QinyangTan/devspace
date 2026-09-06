@@ -1,0 +1,182 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to publish
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: write
+  id-token: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish ${{ inputs.version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DEVSPACE_OAUTH_OWNER_TOKEN: ci-owner-token-that-is-long-enough
+      VERSION: ${{ inputs.version }}
+    steps:
+      - name: Checkout release source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Require main
+        run: |
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "Releases must be dispatched from main; got $GITHUB_REF" >&2
+            exit 1
+          fi
+
+      - name: Require successful main CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          state="$(gh run list \
+            --workflow ci.yml \
+            --commit "$GITHUB_SHA" \
+            --event push \
+            --limit 1 \
+            --json status,conclusion \
+            --jq '.[0] | "\(.status):\(.conclusion)"')"
+          if [[ "$state" != "completed:success" ]]; then
+            echo "The exact release commit must have a successful main CI push run; got ${state:-no run}." >&2
+            exit 1
+          fi
+
+      - name: Resolve release metadata
+        id: release
+        run: |
+          stable='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+          prerelease='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-(beta|rc)\.([1-9][0-9]*)$'
+
+          if [[ "$VERSION" =~ $stable ]]; then
+            npm_tag=latest
+            is_prerelease=false
+            source_version="$(node -p 'require("./package.json").version')"
+            if [[ "$source_version" != "$VERSION" ]]; then
+              echo "Stable releases require package.json version $VERSION; found $source_version." >&2
+              exit 1
+            fi
+          elif [[ "$VERSION" =~ $prerelease ]]; then
+            npm_tag=beta
+            is_prerelease=true
+          else
+            echo "Unsupported release version: $VERSION" >&2
+            echo "Use X.Y.Z-beta.N, X.Y.Z-rc.N, or X.Y.Z." >&2
+            exit 1
+          fi
+
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+          echo "npm_tag=$npm_tag" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$is_prerelease" >> "$GITHUB_OUTPUT"
+
+      - name: Verify release tag ownership
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          if git show-ref --verify --quiet "refs/tags/$TAG"; then
+            tag_sha="$(git rev-parse "$TAG^{commit}")"
+            if [[ "$tag_sha" != "$GITHUB_SHA" ]]; then
+              echo "$TAG already points to $tag_sha instead of $GITHUB_SHA." >&2
+              exit 1
+            fi
+          fi
+
+      - name: Setup pnpm and Node
+        uses: pnpm/setup@84cb39b217b10273981911c288cd62326dc7c6d2 # v2
+        with:
+          runtime: node@22
+          cache: false
+          install: false
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Set package version
+        run: |
+          npm pkg set version="$VERSION"
+          node -e 'const pkg = require("./package.json"); if (pkg.version !== process.env.VERSION) process.exit(1)'
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Test
+        env:
+          DEVSPACE_REQUIRE_PI_SANDBOX: "0"
+        run: pnpm test
+
+      - name: Package install smoke test
+        run: pnpm test:package-install
+
+      - name: Pack release artifact
+        id: pack
+        run: |
+          mkdir -p .release
+          filename="$(npm pack --silent --pack-destination .release | tail -n 1)"
+          test -n "$filename"
+          echo "tarball=.release/$filename" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare draft GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag }}
+          IS_PRERELEASE: ${{ steps.release.outputs.prerelease }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Reusing existing GitHub release $TAG."
+          else
+            args=(release create "$TAG" --draft --title "$TAG" --target "$GITHUB_SHA" --generate-notes)
+            if [[ "$IS_PRERELEASE" == "true" ]]; then
+              args+=(--prerelease)
+            fi
+            gh "${args[@]}"
+          fi
+
+      - name: Upload release artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag }}
+          TARBALL: ${{ steps.pack.outputs.tarball }}
+        run: gh release upload "$TAG" "$TARBALL" --clobber
+
+      - name: Setup npm trusted publishing
+        run: |
+          npm install --global npm@11.8.0
+          npm config set registry https://registry.npmjs.org/
+          npm --version
+
+      - name: Publish npm package
+        env:
+          NPM_TAG: ${{ steps.release.outputs.npm_tag }}
+          TARBALL: ${{ steps.pack.outputs.tarball }}
+        run: |
+          package_name="$(node -p 'require("./package.json").name')"
+          if published="$(npm view "$package_name@$VERSION" version 2>/dev/null)" && [[ "$published" == "$VERSION" ]]; then
+            echo "$package_name@$VERSION is already published; skipping npm publish."
+          else
+            npm publish "$TARBALL" --access public --tag "$NPM_TAG" --provenance
+          fi
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag }}
+          IS_PRERELEASE: ${{ steps.release.outputs.prerelease }}
+        run: |
+          if [[ "$IS_PRERELEASE" == "true" ]]; then
+            gh release edit "$TAG" --draft=false --prerelease
+          else
+            gh release edit "$TAG" --draft=false --prerelease=false --latest
+          fi
