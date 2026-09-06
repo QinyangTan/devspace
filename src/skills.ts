@@ -18,7 +18,6 @@ export interface LoadedSkills {
 export interface SkillReadResolution {
   absolutePath: string;
   skill: Skill;
-  isSkillFile: boolean;
 }
 
 const SUBAGENTS_SKILL_NAME = "subagents";
@@ -84,7 +83,6 @@ export function loadWorkspaceSkills(config: ServerConfig, cwd: string): LoadedSk
 
 export function resolveSkillReadPath(
   skills: Skill[],
-  activatedSkillDirs: Set<string>,
   inputPath: string,
 ): SkillReadResolution | undefined {
   const absolutePath = resolve(expandHomePath(inputPath));
@@ -92,26 +90,18 @@ export function resolveSkillReadPath(
   for (const skill of skills) {
     const skillFilePath = resolve(skill.filePath);
     if (absolutePath === skillFilePath) {
-      return { absolutePath, skill, isSkillFile: true };
+      return { absolutePath, skill };
     }
   }
 
   for (const skill of skills) {
     const baseDir = resolve(skill.baseDir);
-    if (!activatedSkillDirs.has(baseDir)) continue;
     if (!isPathInsideRoot(absolutePath, baseDir)) continue;
 
-    return { absolutePath, skill, isSkillFile: false };
+    return { absolutePath, skill };
   }
 
   return undefined;
-}
-
-export function markSkillActivated(
-  activatedSkillDirs: Set<string>,
-  skill: Skill,
-): void {
-  activatedSkillDirs.add(resolve(skill.baseDir));
 }
 
 export function formatPathForPrompt(path: string): string {

@@ -252,8 +252,9 @@ Copy or adapt them into one of the active profile directories before use.
 
 Legacy project paths such as `.pi/skills` can be added to `skills.paths` when needed.
 
-If a skill appears in `open_workspace`, the model must read that skill's
-`SKILL.md` before reading other files inside the skill directory.
+If a skill appears in `open_workspace`, the model should read that skill's
+`SKILL.md` before following it. DevSpace permits reads within advertised skill
+directories without tracking whether `SKILL.md` was read first.
 
 ## Review Card Does Not Appear
 

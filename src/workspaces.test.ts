@@ -156,6 +156,62 @@ test("persisted checkout and worktree sessions restore after recreating the regi
   }
 });
 
+test("workspace cache evicts old contexts without losing advertised skill reads", async (t) => {
+  const context = await fixture(t);
+  const stateDir = join(context.root, ".bounded-state");
+  const agentDir = join(context.outsideRoot, "agent");
+  const skillDir = join(agentDir, "skills", "cache-skill");
+  const skillFile = join(skillDir, "SKILL.md");
+  const resourceFile = join(skillDir, "reference.md");
+  await mkdir(skillDir, { recursive: true });
+  await writeFile(
+    skillFile,
+    [
+      "---",
+      "name: cache-skill",
+      "description: Cache eviction regression skill.",
+      "---",
+      "",
+      "Read the reference when needed.",
+      "",
+    ].join("\n"),
+  );
+  await writeFile(resourceFile, "reference\n");
+
+  const config = loadConfig(writeTestDevspaceConfig(
+    join(context.root, ".bounded-home"),
+    {
+      server: { port: 1 },
+      workspaces: {
+        allowedRoots: [context.root],
+        worktreeRoot: join(context.root, ".devspace", "bounded-worktrees"),
+      },
+      skills: { agentDir },
+      subagents: { enabled: true, providers: [] },
+    },
+  ));
+
+  const store = new SqliteWorkspaceStore(stateDir);
+  t.after(() => store.close());
+  const registry = new WorkspaceRegistry(config, store);
+  const first = await registry.openWorkspace(context.root);
+  assert.equal(
+    registry.resolveReadPath(first.workspace, resourceFile).absolutePath,
+    resourceFile,
+  );
+
+  for (let index = 0; index < 32; index += 1) {
+    await registry.openWorkspace(context.root);
+  }
+
+  const restored = registry.getWorkspace(first.workspace.id);
+  assert.notEqual(restored, first.workspace);
+  assert.equal(
+    registry.resolveReadPath(restored, resourceFile).absolutePath,
+    resourceFile,
+  );
+});
+
 test("workspace paths outside the allowed roots are rejected", async (t) => {
   const context = await fixture(t);
 

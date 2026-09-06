@@ -232,18 +232,12 @@ try {
   assert.ok(projectSkill);
   assert.match(formatPathForPrompt(projectSkill.filePath), /SKILL\.md$/);
 
-  const skillFileRead = resolveSkillReadPath(loaded.skills, new Set(), projectSkill.filePath);
-  assert.equal(skillFileRead?.isSkillFile, true);
+  const skillFileRead = resolveSkillReadPath(loaded.skills, projectSkill.filePath);
   assert.equal(skillFileRead?.absolutePath, projectSkill.filePath);
 
   const resourcePath = join(projectSkill.baseDir, "references.md");
   await writeFile(resourcePath, "reference\n");
-  assert.equal(resolveSkillReadPath(loaded.skills, new Set(), resourcePath), undefined);
-  assert.equal(
-    resolveSkillReadPath(loaded.skills, new Set([projectSkill.baseDir]), resourcePath)
-      ?.isSkillFile,
-    false,
-  );
+  assert.equal(resolveSkillReadPath(loaded.skills, resourcePath)?.absolutePath, resourcePath);
 } finally {
   if (originalHome === undefined) delete process.env.HOME;
   else process.env.HOME = originalHome;
