@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
@@ -431,6 +431,88 @@ test("HTTP endpoint serves modern MCP and stateless legacy clients", async (t) =
   assert.match(await legacyTools.text(), /"open_workspace"/);
 });
 
+test("server shutdown waits for an active MCP tool call", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "devspace-shutdown-test-"));
+  const ownerToken = "test-owner-token-that-is-long-enough";
+  const env = writeTestDevspaceConfig(join(root, ".config"), {
+    server: {
+      port: 1,
+      publicBaseUrl: "https://example.test",
+    },
+    workspaces: {
+      allowedRoots: [root],
+      worktreeRoot: join(root, ".worktrees"),
+    },
+    storage: { stateDir: join(root, ".state") },
+  });
+  const config = loadConfig(env);
+  const running = createServer(config, { incomingArtifactAdapters: [] });
+  const httpServer = running.app.listen(0, "127.0.0.1");
+  await new Promise<void>((resolve) => httpServer.once("listening", resolve));
+
+  t.after(async () => {
+    await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    await running.close();
+    await rm(root, { recursive: true, force: true });
+  });
+
+  const address = httpServer.address();
+  assert.ok(address && typeof address === "object");
+  const localBaseUrl = `http://127.0.0.1:${address.port}`;
+  const accessToken = await issueTestAccessToken(
+    localBaseUrl,
+    config.publicBaseUrl,
+    ownerToken,
+  );
+  const opened = await postModernMcp(
+    localBaseUrl,
+    accessToken,
+    "tools/call",
+    {
+      name: "open_workspace",
+      arguments: { path: root },
+      _meta: { "openai/session": "shutdown-test" },
+    },
+  );
+  const openBody = await opened.json() as {
+    result?: { structuredContent?: { workspaceId?: string } };
+  };
+  const workspaceId = openBody.result?.structuredContent?.workspaceId;
+  assert.equal(typeof workspaceId, "string");
+
+  const command = [
+    "const fs=require('node:fs')",
+    "fs.writeFileSync('started','')",
+    "const timer=setInterval(()=>{if(fs.existsSync('release')) clearInterval(timer)},10)",
+  ].join(";");
+  const toolCall = postModernMcp(
+    localBaseUrl,
+    accessToken,
+    "tools/call",
+    {
+      name: "exec_command",
+      arguments: {
+        workspaceId,
+        cmd: `node -e \"${command}\"`,
+        yieldTimeMs: 30_000,
+      },
+    },
+  );
+  await waitForFile(join(root, "started"));
+
+  let shutdownFinished = false;
+  const shutdown = running.close().then(() => {
+    shutdownFinished = true;
+  });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(shutdownFinished, false);
+
+  await writeFile(join(root, "release"), "");
+  await toolCall;
+  await shutdown;
+  assert.equal(shutdownFinished, true);
+});
+
 interface ServerFixture {
   client: Client;
   project: string;
@@ -543,6 +625,18 @@ async function fixture(
 
 async function git(cwd: string, args: string[]): Promise<void> {
   await execFileAsync("git", args, { cwd });
+}
+
+async function waitForFile(path: string): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    try {
+      await access(path);
+      return;
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
+  assert.fail(`Timed out waiting for ${path}`);
 }
 
 async function issueTestAccessToken(
