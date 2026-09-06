@@ -16,7 +16,6 @@ const tsxCliPath = fileURLToPath(import.meta.resolve("tsx/cli"));
 
 try {
   await mkdir(checkoutRoot, { recursive: true });
-  const canonicalCheckoutRoot = await realpath(checkoutRoot);
   await mkdir(join(sourceConfigDir, "skills", "example"), { recursive: true });
   await mkdir(sourceStateDir, { recursive: true });
   await writeFile(join(sourceConfigDir, "config.jsonc"), JSON.stringify({
@@ -38,7 +37,10 @@ try {
   const localConfig = JSON.parse(
     await readFile(join(devRoot, "config", "config.jsonc"), "utf8"),
   ) as { storage: { stateDir: string } };
-  assert.equal(localConfig.storage.stateDir, join(canonicalCheckoutRoot, ".devspace-dev", "state"));
+  assert.equal(
+    await realpath(localConfig.storage.stateDir),
+    await realpath(join(devRoot, "state")),
+  );
   assert.equal(existsSync(join(devRoot, "config", "auth.json")), true);
   assert.equal(existsSync(join(devRoot, "config", "skills", "example", "SKILL.md")), true);
 
