@@ -818,6 +818,12 @@ export function createServer(
       toolActivities.track,
     );
   });
+  const logMcpHandlerError = (error: Error) => logEvent(
+    config.logging,
+    "error",
+    "mcp_handler_error",
+    modernMcpAdapterErrorLogFields(error),
+  );
   const mcpHandler = createMcpHandler(() => {
     const adapter = createModernMcpServerAdapter(
       mcpServerInfo(),
@@ -825,14 +831,12 @@ export function createServer(
     );
     bindModernMcpSurface(adapter.registrationTarget);
     return adapter.server;
+  }, {
+    legacy: "stateless",
+    onerror: logMcpHandlerError,
   });
   const mcpNodeHandler = toNodeHandler(mcpHandler, {
-    onerror: (error) => logEvent(
-      config.logging,
-      "error",
-      "mcp_handler_error",
-      modernMcpAdapterErrorLogFields(error),
-    ),
+    onerror: logMcpHandlerError,
   });
 
   if (config.logging.trustProxy) {
