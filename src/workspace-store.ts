@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, lt } from "drizzle-orm";
 import { openDatabase, type DatabaseHandle } from "./db/client.js";
 import {
   workspaceConversationBindings,
@@ -41,7 +41,9 @@ export interface WorkspaceStore {
     managed?: boolean;
   }): WorkspaceSession;
   getSession(id: string): WorkspaceSession | undefined;
+  listStaleManagedWorktrees(before: Date): WorkspaceSession[];
   touchSession(id: string): void;
+  deleteSession(id: string): void;
   getConversationBinding(
     conversationScopeId: string,
     targetKey: string,
@@ -115,10 +117,32 @@ export class SqliteWorkspaceStore implements WorkspaceStore {
     return row ? rowToWorkspaceSession(row) : undefined;
   }
 
+  listStaleManagedWorktrees(before: Date): WorkspaceSession[] {
+    return this.database.db
+      .select()
+      .from(workspaceSessions)
+      .where(
+        and(
+          eq(workspaceSessions.mode, "worktree"),
+          eq(workspaceSessions.managed, "true"),
+          lt(workspaceSessions.lastUsedAt, before.toISOString()),
+        ),
+      )
+      .all()
+      .map(rowToWorkspaceSession);
+  }
+
   touchSession(id: string): void {
     this.database.db
       .update(workspaceSessions)
       .set({ lastUsedAt: new Date().toISOString() })
+      .where(eq(workspaceSessions.id, id))
+      .run();
+  }
+
+  deleteSession(id: string): void {
+    this.database.db
+      .delete(workspaceSessions)
       .where(eq(workspaceSessions.id, id))
       .run();
   }
