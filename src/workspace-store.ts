@@ -8,6 +8,7 @@ import {
 } from "./db/schema.js";
 
 export type WorkspaceMode = "checkout" | "worktree";
+export type WorkspaceRecoveryKind = "head" | "stash";
 
 export interface WorkspaceSession {
   id: string;
@@ -17,6 +18,7 @@ export interface WorkspaceSession {
   sourceRoot?: string;
   baseRef?: string;
   baseSha?: string;
+  recoveryKind?: WorkspaceRecoveryKind;
   managed: boolean;
   createdAt: string;
   lastUsedAt: string;
@@ -42,6 +44,8 @@ export interface WorkspaceStore {
   }): WorkspaceSession;
   getSession(id: string): WorkspaceSession | undefined;
   listStaleManagedWorktrees(before: Date): WorkspaceSession[];
+  markSessionPruned(id: string, recoveryKind?: WorkspaceRecoveryKind): void;
+  reactivateSession(id: string): boolean;
   touchSession(id: string): boolean;
   deleteSession(id: string): void;
   getConversationBinding(
@@ -131,6 +135,35 @@ export class SqliteWorkspaceStore implements WorkspaceStore {
       )
       .all()
       .map(rowToWorkspaceSession);
+  }
+
+  markSessionPruned(id: string, recoveryKind?: WorkspaceRecoveryKind): void {
+    this.database.db
+      .update(workspaceSessions)
+      .set({
+        status: "pruned",
+        recoveryKind: recoveryKind ?? null,
+      })
+      .where(eq(workspaceSessions.id, id))
+      .run();
+  }
+
+  reactivateSession(id: string): boolean {
+    const result = this.database.db
+      .update(workspaceSessions)
+      .set({
+        status: "active",
+        recoveryKind: null,
+        lastUsedAt: new Date().toISOString(),
+      })
+      .where(
+        and(
+          eq(workspaceSessions.id, id),
+          eq(workspaceSessions.status, "pruned"),
+        ),
+      )
+      .run();
+    return result.changes > 0;
   }
 
   touchSession(id: string): boolean {
@@ -251,6 +284,10 @@ function rowToWorkspaceSession(row: WorkspaceSessionRow): WorkspaceSession {
     sourceRoot: row.sourceRoot ?? undefined,
     baseRef: row.baseRef ?? undefined,
     baseSha: row.baseSha ?? undefined,
+    recoveryKind:
+      row.recoveryKind === "head" || row.recoveryKind === "stash"
+        ? row.recoveryKind
+        : undefined,
     managed: row.managed === "true",
     createdAt: row.createdAt,
     lastUsedAt: row.lastUsedAt,
