@@ -222,6 +222,50 @@ test("concurrent lookups share one pruned workspace restoration", async (t) => {
   assert.equal(store.getSession(workspaceId)?.status, "active");
 });
 
+test("failed session reactivation does not strand a restored worktree", async (t) => {
+  const context = await fixture(t);
+  const gitRoot = await createGitProject(context.root);
+  const stateDir = await mkdtemp(join(tmpdir(), "devspace-pruned-reactivation-state-test-"));
+  class FailOnceStore extends SqliteWorkspaceStore {
+    private failNextReactivation = true;
+
+    override reactivateSession(id: string): boolean {
+      if (this.failNextReactivation) {
+        this.failNextReactivation = false;
+        return false;
+      }
+      return super.reactivateSession(id);
+    }
+  }
+  const store = new FailOnceStore(stateDir);
+  t.after(async () => {
+    store.close();
+    await rm(stateDir, { recursive: true, force: true });
+  });
+  const registry = new WorkspaceRegistry(context.config, store);
+  const opened = await registry.openWorkspace({ path: gitRoot, mode: "worktree" });
+  const workspaceId = opened.workspace.id;
+  const worktreePath = opened.workspace.root;
+
+  await cleanupManagedWorktrees({
+    store,
+    worktreeRoot: context.config.worktreeRoot,
+    allowedRoots: context.config.allowedRoots,
+    staleBefore: new Date(Date.now() + 60_000),
+  });
+
+  await assert.rejects(
+    () => registry.getWorkspace(workspaceId),
+    /could not be reactivated/,
+  );
+  assert.equal(store.getSession(workspaceId)?.status, "pruned");
+  await assert.rejects(() => stat(worktreePath), /ENOENT/);
+
+  const retried = await registry.getWorkspace(workspaceId);
+  assert.equal(retried.id, workspaceId);
+  assert.equal(store.getSession(workspaceId)?.status, "active");
+});
+
 test("invalid persisted roots are not refreshed before validation", async (t) => {
   const context = await fixture(t);
   const stateDir = await mkdtemp(join(tmpdir(), "devspace-invalid-root-state-test-"));

@@ -234,6 +234,24 @@ export async function restoreManagedWorktree(input: {
   }
 }
 
+export async function discardRestoredManagedWorktree(input: {
+  session: WorkspaceSession;
+  worktreeRoot: string;
+  allowedRoots: string[];
+}): Promise<void> {
+  const { session } = input;
+  if (!session.sourceRoot) {
+    throw new Error(`Stored managed worktree is missing sourceRoot: ${session.id}`);
+  }
+
+  const worktreePath = assertAllowedPath(session.root, [input.worktreeRoot]);
+  if (!(await isDirectory(worktreePath))) return;
+
+  const sourceRoot = await assertCleanupSourceRootAllowed(session.sourceRoot, input.allowedRoots);
+  await assertManagedWorktreePath(worktreePath, input.worktreeRoot);
+  await git(["worktree", "remove", "--force", worktreePath], sourceRoot);
+}
+
 export function managedWorktreeRecoveryRef(workspaceId: string): string {
   return `refs/devspace/recovery/${workspaceId}`;
 }

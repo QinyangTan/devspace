@@ -10,7 +10,11 @@ import { mkdir, opendir, readFile, realpath, stat } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { loadProjectContextFiles } from "@earendil-works/pi-coding-agent";
 import type { ServerConfig } from "./config.js";
-import { createManagedWorktree, restoreManagedWorktree } from "./git-worktrees.js";
+import {
+  createManagedWorktree,
+  discardRestoredManagedWorktree,
+  restoreManagedWorktree,
+} from "./git-worktrees.js";
 import {
   AccessDeniedError,
   assertAllowedPath,
@@ -324,6 +328,11 @@ export class WorkspaceRegistry {
       allowedRoots: this.config.allowedRoots,
     });
     if (!this.store.reactivateSession(session.id)) {
+      await discardRestoredManagedWorktree({
+        session,
+        worktreeRoot: this.config.worktreeRoot,
+        allowedRoots: this.config.allowedRoots,
+      });
       throw new Error(`Restored workspace ${session.id}, but its persisted session could not be reactivated.`);
     }
   }
