@@ -261,11 +261,11 @@ export class WorkspaceRegistry {
       throw unavailableWorkspaceError(workspaceId);
     }
 
+    const root = this.assertWorkspaceRootAllowed(session.root, session.mode, session.sourceRoot);
     if (this.store && !this.store.touchSession(workspaceId)) {
       throw unavailableWorkspaceError(workspaceId);
     }
 
-    const root = this.assertWorkspaceRootAllowed(session.root, session.mode, session.sourceRoot);
     const restoredWorkspace: Workspace = {
       id: session.id,
       root,

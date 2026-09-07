@@ -184,6 +184,26 @@ test("a pruning claim prevents a cached worktree from becoming active again", as
   );
 });
 
+test("invalid persisted roots are not refreshed before validation", async (t) => {
+  const context = await fixture(t);
+  const stateDir = await mkdtemp(join(tmpdir(), "devspace-invalid-root-state-test-"));
+  const store = new SqliteWorkspaceStore(stateDir);
+  t.after(async () => {
+    store.close();
+    await rm(stateDir, { recursive: true, force: true });
+  });
+  const session = store.createSession({
+    id: "ws_invalid_root",
+    root: context.outsideRoot,
+    mode: "checkout",
+  });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+
+  const registry = new WorkspaceRegistry(context.config, store);
+  assert.throws(() => registry.getWorkspace(session.id), /outside allowed roots/);
+  assert.equal(store.getSession(session.id)?.lastUsedAt, session.lastUsedAt);
+});
+
 test("workspace cache evicts old contexts without losing advertised skill reads", async (t) => {
   const context = await fixture(t);
   const stateDir = join(context.root, ".bounded-state");
