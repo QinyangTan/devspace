@@ -122,11 +122,16 @@ export async function cleanupManagedWorktrees(input: {
     failed: [],
   };
 
-  for (const session of input.store.listStaleManagedWorktrees(input.staleBefore)) {
+  for (const candidate of input.store.listStaleManagedWorktrees(input.staleBefore)) {
+    const session = input.store.claimStaleManagedWorktree(candidate.id, input.staleBefore);
+    if (!session) continue;
+
+    let sessionRemoved = false;
     try {
       const worktreePath = assertAllowedPath(session.root, [input.worktreeRoot]);
       if (!(await isDirectory(worktreePath))) {
         input.store.deleteSession(session.id);
+        sessionRemoved = true;
         result.missing.push(session.id);
         continue;
       }
@@ -158,14 +163,6 @@ export async function cleanupManagedWorktrees(input: {
         recoverySha = headSha;
       }
 
-      const currentSession = input.store.getSession(session.id);
-      if (
-        !currentSession
-        || currentSession.lastUsedAt >= input.staleBefore.toISOString()
-      ) {
-        continue;
-      }
-
       const recoveryRef = recoverySha ? managedWorktreeRecoveryRef(session.id) : undefined;
       if (recoveryRef && recoverySha) {
         await git(["update-ref", recoveryRef, recoverySha], session.sourceRoot);
@@ -178,12 +175,15 @@ export async function cleanupManagedWorktrees(input: {
       await git(["clean", "-fdX"], worktreePath);
       await git(["worktree", "remove", worktreePath], session.sourceRoot);
       input.store.deleteSession(session.id);
+      sessionRemoved = true;
       result.removed.push({ workspaceId: session.id, recoveryRef, recoverySha });
     } catch (error) {
       result.failed.push({
         workspaceId: session.id,
         error: error instanceof Error ? error.message : String(error),
       });
+    } finally {
+      if (!sessionRemoved) input.store.releasePruningSession(session.id);
     }
   }
 

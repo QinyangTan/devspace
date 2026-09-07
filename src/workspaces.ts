@@ -247,17 +247,22 @@ export class WorkspaceRegistry {
   getWorkspace(workspaceId: string): Workspace {
     const workspace = this.workspaces.get(workspaceId);
     if (workspace) {
+      if (this.store && !this.store.touchSession(workspaceId)) {
+        this.workspaces.delete(workspaceId);
+        throw unavailableWorkspaceError(workspaceId);
+      }
       this.workspaces.delete(workspaceId);
       this.workspaces.set(workspaceId, workspace);
-      this.store?.touchSession(workspaceId);
       return workspace;
     }
 
     const session = this.store?.getSession(workspaceId);
-    if (!session) {
-      throw new Error(
-        `Unknown workspaceId: ${workspaceId}. Open the target project or worktree again and continue with the new workspaceId.`,
-      );
+    if (!session || session.status !== "active") {
+      throw unavailableWorkspaceError(workspaceId);
+    }
+
+    if (this.store && !this.store.touchSession(workspaceId)) {
+      throw unavailableWorkspaceError(workspaceId);
     }
 
     const root = this.assertWorkspaceRootAllowed(session.root, session.mode, session.sourceRoot);
@@ -280,7 +285,6 @@ export class WorkspaceRegistry {
       ...this.loadSkillsForWorkspace(root),
       agentProfiles: [],
     };
-    this.store?.touchSession(workspaceId);
     this.rememberWorkspace(restoredWorkspace);
 
     return restoredWorkspace;
@@ -466,6 +470,12 @@ export class WorkspaceRegistry {
 
     return discovered.sort((a, b) => a.path.localeCompare(b.path));
   }
+}
+
+function unavailableWorkspaceError(workspaceId: string): Error {
+  return new Error(
+    `Unknown workspaceId: ${workspaceId}. Open the target project or worktree again and continue with the new workspaceId.`,
+  );
 }
 
 async function canonicalPath(path: string): Promise<string> {

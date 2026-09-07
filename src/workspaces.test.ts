@@ -156,6 +156,27 @@ test("persisted checkout and worktree sessions restore after recreating the regi
   }
 });
 
+test("a pruning claim prevents a cached worktree from becoming active again", async (t) => {
+  const context = await fixture(t);
+  const gitRoot = await createGitProject(context.root);
+  const stateDir = join(context.root, ".pruning-state");
+  const store = new SqliteWorkspaceStore(stateDir);
+  t.after(() => store.close());
+  const registry = new WorkspaceRegistry(context.config, store);
+  const opened = await registry.openWorkspace({ path: gitRoot, mode: "worktree" });
+
+  const claimed = store.claimStaleManagedWorktree(
+    opened.workspace.id,
+    new Date(Date.now() + 60_000),
+  );
+  assert.equal(claimed?.status, "pruning");
+
+  assert.throws(
+    () => registry.getWorkspace(opened.workspace.id),
+    /Unknown workspaceId/,
+  );
+});
+
 test("workspace cache evicts old contexts without losing advertised skill reads", async (t) => {
   const context = await fixture(t);
   const stateDir = join(context.root, ".bounded-state");

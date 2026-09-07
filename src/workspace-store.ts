@@ -42,7 +42,9 @@ export interface WorkspaceStore {
   }): WorkspaceSession;
   getSession(id: string): WorkspaceSession | undefined;
   listStaleManagedWorktrees(before: Date): WorkspaceSession[];
-  touchSession(id: string): void;
+  claimStaleManagedWorktree(id: string, before: Date): WorkspaceSession | undefined;
+  releasePruningSession(id: string): void;
+  touchSession(id: string): boolean;
   deleteSession(id: string): void;
   getConversationBinding(
     conversationScopeId: string,
@@ -123,6 +125,7 @@ export class SqliteWorkspaceStore implements WorkspaceStore {
       .from(workspaceSessions)
       .where(
         and(
+          eq(workspaceSessions.status, "active"),
           eq(workspaceSessions.mode, "worktree"),
           eq(workspaceSessions.managed, "true"),
           lt(workspaceSessions.lastUsedAt, before.toISOString()),
@@ -132,12 +135,50 @@ export class SqliteWorkspaceStore implements WorkspaceStore {
       .map(rowToWorkspaceSession);
   }
 
-  touchSession(id: string): void {
+  claimStaleManagedWorktree(id: string, before: Date): WorkspaceSession | undefined {
+    const row = this.database.db
+      .update(workspaceSessions)
+      .set({ status: "pruning" })
+      .where(
+        and(
+          eq(workspaceSessions.id, id),
+          eq(workspaceSessions.status, "active"),
+          eq(workspaceSessions.mode, "worktree"),
+          eq(workspaceSessions.managed, "true"),
+          lt(workspaceSessions.lastUsedAt, before.toISOString()),
+        ),
+      )
+      .returning()
+      .get();
+
+    return row ? rowToWorkspaceSession(row) : undefined;
+  }
+
+  releasePruningSession(id: string): void {
     this.database.db
       .update(workspaceSessions)
-      .set({ lastUsedAt: new Date().toISOString() })
-      .where(eq(workspaceSessions.id, id))
+      .set({ status: "active" })
+      .where(
+        and(
+          eq(workspaceSessions.id, id),
+          eq(workspaceSessions.status, "pruning"),
+        ),
+      )
       .run();
+  }
+
+  touchSession(id: string): boolean {
+    const result = this.database.db
+      .update(workspaceSessions)
+      .set({ lastUsedAt: new Date().toISOString() })
+      .where(
+        and(
+          eq(workspaceSessions.id, id),
+          eq(workspaceSessions.status, "active"),
+        ),
+      )
+      .run();
+    return result.changes > 0;
   }
 
   deleteSession(id: string): void {
