@@ -83,11 +83,65 @@ test("stale managed worktree claims exclude concurrent workspace activity", asyn
   });
 
   const future = new Date(Date.now() + 60_000);
-  const claimed = store.claimStaleManagedWorktree("ws_claimed", future);
+  const claimNow = new Date();
+  const claimed = store.claimStaleManagedWorktree({
+    id: "ws_claimed",
+    before: future,
+    now: claimNow,
+    owner: "owner-a",
+    expiresAt: new Date(claimNow.getTime() + 60_000),
+  });
   assert.equal(claimed?.status, "pruning");
   assert.equal(store.touchSession("ws_claimed"), false);
 
-  store.releasePruningSession("ws_claimed");
+  store.releasePruningSession("ws_claimed", "owner-b");
+  assert.equal(store.touchSession("ws_claimed"), false);
+  store.releasePruningSession("ws_claimed", "owner-a");
   assert.equal(store.touchSession("ws_claimed"), true);
-  assert.equal(store.claimStaleManagedWorktree("ws_claimed", new Date(0)), undefined);
+  assert.equal(store.claimStaleManagedWorktree({
+    id: "ws_claimed",
+    before: new Date(0),
+    now: new Date(),
+    owner: "owner-c",
+    expiresAt: future,
+  }), undefined);
+});
+
+test("expired pruning claims can be reclaimed after reopening the store", async (t) => {
+  const stateDir = await mkdtemp(join(tmpdir(), "devspace-workspace-store-test-"));
+  let store = new SqliteWorkspaceStore(stateDir);
+  t.after(async () => {
+    store.close();
+    await rm(stateDir, { recursive: true, force: true });
+  });
+
+  store.createSession({
+    id: "ws_abandoned",
+    root: "/tmp/worktree",
+    mode: "worktree",
+    sourceRoot: "/tmp/repo",
+    managed: true,
+  });
+  const oldNow = new Date(Date.now() - 120_000);
+  assert.ok(store.claimStaleManagedWorktree({
+    id: "ws_abandoned",
+    before: new Date(Date.now() + 60_000),
+    now: oldNow,
+    owner: "dead-process",
+    expiresAt: new Date(Date.now() - 60_000),
+  }));
+  store.close();
+
+  store = new SqliteWorkspaceStore(stateDir);
+  const candidates = store.listStaleManagedWorktrees(new Date(0), new Date());
+  assert.deepEqual(candidates.map((session) => session.id), ["ws_abandoned"]);
+  assert.ok(store.claimStaleManagedWorktree({
+    id: "ws_abandoned",
+    before: new Date(0),
+    now: new Date(),
+    owner: "new-process",
+    expiresAt: new Date(Date.now() + 60_000),
+  }));
+  store.releasePruningSession("ws_abandoned", "new-process");
+  assert.equal(store.getSession("ws_abandoned")?.status, "active");
 });

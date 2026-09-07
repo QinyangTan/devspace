@@ -168,10 +168,14 @@ test("a pruning claim prevents a cached worktree from becoming active again", as
   const registry = new WorkspaceRegistry(context.config, store);
   const opened = await registry.openWorkspace({ path: gitRoot, mode: "worktree" });
 
-  const claimed = store.claimStaleManagedWorktree(
-    opened.workspace.id,
-    new Date(Date.now() + 60_000),
-  );
+  const now = new Date();
+  const claimed = store.claimStaleManagedWorktree({
+    id: opened.workspace.id,
+    before: new Date(now.getTime() + 60_000),
+    now,
+    owner: "test-owner",
+    expiresAt: new Date(now.getTime() + 60_000),
+  });
   assert.equal(claimed?.status, "pruning");
 
   assert.throws(

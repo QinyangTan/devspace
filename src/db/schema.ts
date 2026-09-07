@@ -11,6 +11,8 @@ export const workspaceSessions = sqliteTable(
     baseRef: text("base_ref"),
     baseSha: text("base_sha"),
     managed: text("managed").notNull().default("false"),
+    pruneClaimOwner: text("prune_claim_owner"),
+    pruneClaimExpiresAt: text("prune_claim_expires_at"),
     createdAt: text("created_at").notNull(),
     lastUsedAt: text("last_used_at").notNull(),
   },
