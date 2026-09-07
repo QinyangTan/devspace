@@ -135,7 +135,7 @@ function registerCodexProcessTools(context: ToolRegistrationContext): void {
   const { server, config, workspaces, processSessions } = context;
 
   server.registerTool(
-    "exec_command",
+    "exec_cmd",
     {
       title: "Execute command",
       description:
@@ -203,7 +203,7 @@ function registerCodexProcessTools(context: ToolRegistrationContext): void {
       const snapshot = await runLoggedToolOperation(
         config,
         {
-          tool: "exec_command",
+          tool: "exec_cmd",
           workspaceId,
           workingDirectory: workingDirectory ?? ".",
           command: cmd,
@@ -239,14 +239,14 @@ function registerCodexProcessTools(context: ToolRegistrationContext): void {
     {
       title: "Write to process",
       description:
-        "Poll or write characters to a process returned by exec_command. Omit chars or pass an empty string to poll. Pass \\u0003 to send Ctrl-C.",
+        "Poll or write characters to a process returned by exec_cmd. Omit chars or pass an empty string to poll. Pass \\u0003 to send Ctrl-C.",
       inputSchema: {
         workspaceId: z
           .string()
           .describe("Workspace identifier used to start the process."),
         sessionId: z
           .number()
-          .describe("Process session identifier returned by exec_command."),
+          .describe("Process session identifier returned by exec_cmd."),
         chars: z
           .string()
           .optional()

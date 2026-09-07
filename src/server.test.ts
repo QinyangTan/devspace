@@ -32,7 +32,7 @@ test("tool modes expose the expected host-facing tool surface", async (t) => {
     },
     {
       mode: "codex",
-      expected: ["open_workspace", "read", "apply_patch", "exec_command", "write_stdin", "show_changes"],
+      expected: ["open_workspace", "read", "apply_patch", "exec_cmd", "write_stdin", "show_changes"],
     },
   ];
 
@@ -460,7 +460,7 @@ test("server shutdown waits for an active MCP tool call", async (t) => {
     accessToken,
     "tools/call",
     {
-      name: "exec_command",
+      name: "exec_cmd",
       arguments: {
         workspaceId,
         cmd: `node -e \"${command}\"`,
