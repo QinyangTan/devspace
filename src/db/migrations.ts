@@ -252,6 +252,11 @@ function migrateLocalAgentEffortRename(sqlite: Database.Database): void {
 }
 
 function migrateWorkspacePruneClaims(sqlite: Database.Database): void {
+  const workspaceStateExists = sqlite
+    .prepare("select 1 from sqlite_master where type = 'table' and name = 'workspace_sessions'")
+    .get();
+  if (!workspaceStateExists) return;
+
   addColumnIfMissing(sqlite, "workspace_sessions", "prune_claim_owner", "text");
   addColumnIfMissing(sqlite, "workspace_sessions", "prune_claim_expires_at", "text");
   sqlite.exec(`
