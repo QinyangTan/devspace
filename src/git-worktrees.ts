@@ -158,6 +158,14 @@ export async function cleanupManagedWorktrees(input: {
         recoverySha = headSha;
       }
 
+      const currentSession = input.store.getSession(session.id);
+      if (
+        !currentSession
+        || currentSession.lastUsedAt >= input.staleBefore.toISOString()
+      ) {
+        continue;
+      }
+
       const recoveryRef = recoverySha ? managedWorktreeRecoveryRef(session.id) : undefined;
       if (recoveryRef && recoverySha) {
         await git(["update-ref", recoveryRef, recoverySha], session.sourceRoot);
