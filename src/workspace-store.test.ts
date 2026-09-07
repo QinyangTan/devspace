@@ -7,10 +7,11 @@ import { SqliteWorkspaceStore } from "./workspace-store.js";
 
 test("workspace store lists only stale managed worktrees", async (t) => {
   const stateDir = await mkdtemp(join(tmpdir(), "devspace-workspace-store-test-"));
-  t.after(() => rm(stateDir, { recursive: true, force: true }));
-
   const store = new SqliteWorkspaceStore(stateDir);
-  t.after(() => store.close());
+  t.after(async () => {
+    store.close();
+    await rm(stateDir, { recursive: true, force: true });
+  });
 
   const managed = store.createSession({
     id: "ws_managed",
@@ -41,10 +42,11 @@ test("workspace store lists only stale managed worktrees", async (t) => {
 
 test("deleting a workspace session cascades its conversation binding", async (t) => {
   const stateDir = await mkdtemp(join(tmpdir(), "devspace-workspace-store-test-"));
-  t.after(() => rm(stateDir, { recursive: true, force: true }));
-
   const store = new SqliteWorkspaceStore(stateDir);
-  t.after(() => store.close());
+  t.after(async () => {
+    store.close();
+    await rm(stateDir, { recursive: true, force: true });
+  });
   store.createSession({
     id: "ws_pruned",
     root: "/tmp/worktree",
