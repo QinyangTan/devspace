@@ -404,14 +404,6 @@ body {
   object-fit: contain;
 }
 
-.workspace-provider-logo-image[data-provider="grok"] {
-  width: 20px;
-}
-
-.workspace-agent-profile-logo[data-provider="grok"] {
-  width: 18px;
-}
-
 .workspace-provider-logo.muted {
   opacity: 0.62;
 }
