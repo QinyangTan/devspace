@@ -1,0 +1,220 @@
+import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
+import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import test, { type TestContext } from "node:test";
+import { promisify } from "node:util";
+import {
+  cleanupManagedWorktrees,
+  managedWorktreeRecoveryRef,
+} from "./git-worktrees.js";
+import { SqliteWorkspaceStore } from "./workspace-store.js";
+
+const execFileAsync = promisify(execFile);
+
+test("stale clean worktrees at their base are removed without recovery refs", async (t) => {
+  const fixture = await worktreeFixture(t, "ws_clean");
+
+  const result = await cleanupManagedWorktrees({
+    store: fixture.store,
+    worktreeRoot: fixture.worktreeRoot,
+    staleBefore: futureCutoff(),
+  });
+
+  assert.equal(result.removed.length, 1);
+  assert.equal(result.removed[0]?.recoverySha, undefined);
+  assert.equal(await pathExists(fixture.worktreePath), false);
+  assert.equal(fixture.store.getSession("ws_clean"), undefined);
+  await assert.rejects(() => git(
+    fixture.sourceRoot,
+    ["show-ref", "--verify", managedWorktreeRecoveryRef("ws_clean")],
+  ));
+});
+
+test("detached commits remain reachable through a recovery ref", async (t) => {
+  const fixture = await worktreeFixture(t, "ws_committed");
+  await writeFile(join(fixture.worktreePath, "committed.txt"), "kept\n");
+  await git(fixture.worktreePath, ["add", "committed.txt"]);
+  await git(fixture.worktreePath, ["commit", "-m", "Worktree change"]);
+  const head = await git(fixture.worktreePath, ["rev-parse", "HEAD"]);
+
+  const result = await cleanupManagedWorktrees({
+    store: fixture.store,
+    worktreeRoot: fixture.worktreeRoot,
+    staleBefore: futureCutoff(),
+  });
+
+  assert.equal(result.removed[0]?.recoverySha, head);
+  assert.equal(
+    await git(fixture.sourceRoot, ["show", `${managedWorktreeRecoveryRef("ws_committed")}:committed.txt`]),
+    "kept",
+  );
+});
+
+test("tracked worktree changes are snapshotted before cleanup", async (t) => {
+  const fixture = await worktreeFixture(t, "ws_dirty");
+  await writeFile(join(fixture.worktreePath, "README.md"), "changed in worktree\n");
+
+  const result = await cleanupManagedWorktrees({
+    store: fixture.store,
+    worktreeRoot: fixture.worktreeRoot,
+    staleBefore: futureCutoff(),
+  });
+
+  assert.equal(result.removed.length, 1);
+  assert.equal(await pathExists(fixture.worktreePath), false);
+  assert.equal(
+    await git(fixture.sourceRoot, ["show", `${managedWorktreeRecoveryRef("ws_dirty")}:README.md`]),
+    "changed in worktree",
+  );
+});
+
+test("non-ignored untracked files keep a stale worktree alive", async (t) => {
+  const fixture = await worktreeFixture(t, "ws_untracked");
+  await writeFile(join(fixture.worktreePath, "new-file.ts"), "important work\n");
+
+  const result = await cleanupManagedWorktrees({
+    store: fixture.store,
+    worktreeRoot: fixture.worktreeRoot,
+    staleBefore: futureCutoff(),
+  });
+
+  assert.deepEqual(result.skipped, [{ workspaceId: "ws_untracked", reason: "untracked_files" }]);
+  assert.equal(await pathExists(fixture.worktreePath), true);
+  assert.ok(fixture.store.getSession("ws_untracked"));
+});
+
+test("ignored worktree files are discarded during cleanup", async (t) => {
+  const fixture = await worktreeFixture(t, "ws_ignored", { gitignore: "cache/\n" });
+  await mkdir(join(fixture.worktreePath, "cache"));
+  await writeFile(join(fixture.worktreePath, "cache", "artifact.bin"), "reproducible\n");
+
+  const result = await cleanupManagedWorktrees({
+    store: fixture.store,
+    worktreeRoot: fixture.worktreeRoot,
+    staleBefore: futureCutoff(),
+  });
+
+  assert.equal(result.removed.length, 1);
+  assert.equal(await pathExists(fixture.worktreePath), false);
+});
+
+test("recent managed worktrees are not considered for cleanup", async (t) => {
+  const fixture = await worktreeFixture(t, "ws_recent");
+
+  const result = await cleanupManagedWorktrees({
+    store: fixture.store,
+    worktreeRoot: fixture.worktreeRoot,
+    staleBefore: new Date(0),
+  });
+
+  assert.equal(result.removed.length, 0);
+  assert.equal(await pathExists(fixture.worktreePath), true);
+});
+
+test("missing worktree directories only clear stale persisted sessions", async (t) => {
+  const fixture = await worktreeFixture(t, "ws_missing");
+  await git(fixture.sourceRoot, ["worktree", "remove", fixture.worktreePath]);
+
+  const result = await cleanupManagedWorktrees({
+    store: fixture.store,
+    worktreeRoot: fixture.worktreeRoot,
+    staleBefore: futureCutoff(),
+  });
+
+  assert.deepEqual(result.missing, ["ws_missing"]);
+  assert.equal(fixture.store.getSession("ws_missing"), undefined);
+});
+
+test("one broken stale session does not block cleanup of another", async (t) => {
+  const fixture = await worktreeFixture(t, "ws_good");
+  const brokenPath = join(fixture.worktreeRoot, "broken");
+  await mkdir(brokenPath);
+  fixture.store.createSession({
+    id: "ws_broken",
+    root: brokenPath,
+    mode: "worktree",
+    managed: true,
+  });
+
+  const result = await cleanupManagedWorktrees({
+    store: fixture.store,
+    worktreeRoot: fixture.worktreeRoot,
+    staleBefore: futureCutoff(),
+  });
+
+  assert.equal(result.removed.some((entry) => entry.workspaceId === "ws_good"), true);
+  assert.equal(result.failed.some((entry) => entry.workspaceId === "ws_broken"), true);
+  assert.ok(fixture.store.getSession("ws_broken"));
+});
+
+interface WorktreeFixture {
+  root: string;
+  sourceRoot: string;
+  worktreeRoot: string;
+  worktreePath: string;
+  store: SqliteWorkspaceStore;
+}
+
+async function worktreeFixture(
+  t: TestContext,
+  workspaceId: string,
+  options: { gitignore?: string } = {},
+): Promise<WorktreeFixture> {
+  const root = await mkdtemp(join(tmpdir(), "devspace-worktree-cleanup-test-"));
+  const sourceRoot = join(root, "repo");
+  const worktreeRoot = join(root, "worktrees");
+  const worktreePath = join(worktreeRoot, workspaceId);
+  const stateDir = join(root, "state");
+  await mkdir(sourceRoot);
+  await mkdir(worktreeRoot);
+  await writeFile(join(sourceRoot, "README.md"), "initial\n");
+  if (options.gitignore) await writeFile(join(sourceRoot, ".gitignore"), options.gitignore);
+  await git(sourceRoot, ["init"]);
+  await git(sourceRoot, ["config", "user.email", "devspace@example.com"]);
+  await git(sourceRoot, ["config", "user.name", "DevSpace Test"]);
+  await git(sourceRoot, ["add", "."]);
+  await git(sourceRoot, ["commit", "-m", "Initial commit"]);
+  await git(sourceRoot, ["worktree", "add", "--detach", worktreePath, "HEAD"]);
+
+  const store = new SqliteWorkspaceStore(stateDir);
+  store.createSession({
+    id: workspaceId,
+    root: worktreePath,
+    mode: "worktree",
+    sourceRoot,
+    baseRef: "HEAD",
+    baseSha: await git(sourceRoot, ["rev-parse", "HEAD"]),
+    managed: true,
+  });
+
+  t.after(async () => {
+    store.close();
+    await git(sourceRoot, ["worktree", "remove", "--force", worktreePath]).catch(() => undefined);
+    await rm(root, { recursive: true, force: true });
+  });
+
+  return { root, sourceRoot, worktreeRoot, worktreePath, store };
+}
+
+function futureCutoff(): Date {
+  return new Date(Date.now() + 60_000);
+}
+
+async function git(cwd: string, args: string[]): Promise<string> {
+  const { stdout } = await execFileAsync("git", args, { cwd, encoding: "utf8" });
+  return stdout.trim();
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await stat(path);
+    return true;
+  } catch (error) {
+    if (typeof error === "object" && error && "code" in error && error.code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
+}

@@ -5,6 +5,7 @@ import { mkdir, realpath, rm, stat } from "node:fs/promises";
 import { basename, join, relative, resolve } from "node:path";
 import type { ServerConfig } from "./config.js";
 import { assertAllowedPath, isPathInsideRoot } from "./roots.js";
+import type { WorkspaceStore } from "./workspace-store.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -31,6 +32,25 @@ export interface ManagedWorktree {
   dirtySource: boolean;
   detached: boolean;
   managed: boolean;
+}
+
+export const DEFAULT_MANAGED_WORKTREE_RETENTION_MS = 3 * 24 * 60 * 60 * 1000;
+
+export interface ManagedWorktreeCleanupResult {
+  removed: Array<{
+    workspaceId: string;
+    recoveryRef?: string;
+    recoverySha?: string;
+  }>;
+  missing: string[];
+  skipped: Array<{
+    workspaceId: string;
+    reason: "untracked_files";
+  }>;
+  failed: Array<{
+    workspaceId: string;
+    error: string;
+  }>;
 }
 
 export async function createManagedWorktree(input: {
@@ -88,6 +108,82 @@ export async function createManagedWorktree(input: {
     detached: true,
     managed: true,
   };
+}
+
+export async function cleanupManagedWorktrees(input: {
+  store: WorkspaceStore;
+  worktreeRoot: string;
+  staleBefore: Date;
+}): Promise<ManagedWorktreeCleanupResult> {
+  const result: ManagedWorktreeCleanupResult = {
+    removed: [],
+    missing: [],
+    skipped: [],
+    failed: [],
+  };
+
+  for (const session of input.store.listStaleManagedWorktrees(input.staleBefore)) {
+    try {
+      const worktreePath = assertAllowedPath(session.root, [input.worktreeRoot]);
+      if (!(await isDirectory(worktreePath))) {
+        input.store.deleteSession(session.id);
+        result.missing.push(session.id);
+        continue;
+      }
+      if (!session.sourceRoot) {
+        throw new Error(`Stored managed worktree is missing sourceRoot: ${session.id}`);
+      }
+
+      const status = await git(
+        ["status", "--porcelain=v1", "--untracked-files=normal", "--ignored=no"],
+        worktreePath,
+      );
+      if (status.split("\n").some((line) => line.startsWith("?? "))) {
+        result.skipped.push({ workspaceId: session.id, reason: "untracked_files" });
+        continue;
+      }
+
+      const hasTrackedChanges = status.trim().length > 0;
+      const headSha = (await git(["rev-parse", "HEAD"], worktreePath)).trim();
+      let recoverySha: string | undefined;
+      if (hasTrackedChanges) {
+        recoverySha = (await git(
+          ["stash", "create", `DevSpace recovery ${session.id}`],
+          worktreePath,
+        )).trim();
+        if (!recoverySha) {
+          throw new Error(`Git could not snapshot tracked changes for ${session.id}.`);
+        }
+      } else if (!session.baseSha || headSha !== session.baseSha) {
+        recoverySha = headSha;
+      }
+
+      const recoveryRef = recoverySha ? managedWorktreeRecoveryRef(session.id) : undefined;
+      if (recoveryRef && recoverySha) {
+        await git(["update-ref", recoveryRef, recoverySha], session.sourceRoot);
+      }
+
+      if (hasTrackedChanges) {
+        await git(["reset", "--hard", "HEAD"], worktreePath);
+      }
+      // Ignored files are reproducible worktree-local state (dependencies, build output, caches).
+      await git(["clean", "-fdX"], worktreePath);
+      await git(["worktree", "remove", worktreePath], session.sourceRoot);
+      input.store.deleteSession(session.id);
+      result.removed.push({ workspaceId: session.id, recoveryRef, recoverySha });
+    } catch (error) {
+      result.failed.push({
+        workspaceId: session.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  return result;
+}
+
+export function managedWorktreeRecoveryRef(workspaceId: string): string {
+  return `refs/devspace/recovery/${workspaceId}`;
 }
 
 async function resolveGitRoot(path: string, allowedRoots: string[]): Promise<string> {
@@ -157,6 +253,17 @@ function sanitizePathSegment(value: string): string {
     .replace(/[^a-zA-Z0-9._-]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 80);
+}
+
+async function isDirectory(path: string): Promise<boolean> {
+  try {
+    return (await stat(path)).isDirectory();
+  } catch (error) {
+    if (typeof error === "object" && error && "code" in error && error.code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
 }
 
 async function git(args: string[], cwd: string): Promise<string> {
