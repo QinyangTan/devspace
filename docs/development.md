@@ -95,3 +95,61 @@ pnpm typecheck
 pnpm test
 pnpm build
 ```
+
+## Releases
+
+Releases are published by the manual `Release` GitHub Actions workflow. Do not
+publish the package directly from a development checkout for normal releases.
+The workflow only accepts runs dispatched from `main`, and the exact commit must
+already have a successful `CI` push run.
+
+Prereleases use the `beta` npm dist-tag. Both beta and release-candidate
+versions follow the same install channel:
+
+```text
+1.1.0-beta.1 -> @beta
+1.1.0-beta.2 -> @beta
+1.1.0-rc.1   -> @beta
+1.1.0        -> @latest
+```
+
+Run the workflow from GitHub Actions and enter the version without a leading
+`v`, for example `1.1.0-beta.1`. The workflow temporarily writes prerelease
+versions into `package.json`, validates and packs that exact source commit,
+publishes the resulting tarball to npm, and then publishes the matching GitHub
+release. Prerelease version changes are not committed back to `main`.
+
+Stable releases use the same temporary version change while building and
+publishing. After npm and GitHub publication both succeed, the workflow commits
+the released version back to `main` as `chore(release): prepare vX.Y.Z`. If
+`main` moved while the release was running, the version sync fails instead of
+overwriting concurrent work. This keeps the source tree aligned with the latest
+stable release without creating version commits for every beta or release
+candidate. A stable release is rejected if its version is lower than either the
+source version or npm's current `latest` version.
+
+### npm trusted publishing setup
+
+The release workflow authenticates to npm through GitHub Actions OIDC instead of
+a long-lived npm token. Configure `@waishnav/devspace` on npm with a GitHub
+Actions trusted publisher using:
+
+- repository owner: `Waishnav`
+- repository: `devspace`
+- workflow filename: `release.yml`
+- no GitHub environment
+- allow direct `npm publish`
+
+The workflow uses a GitHub-hosted runner, requests `id-token: write`, and pins an
+npm CLI new enough for trusted publishing. Its package artifact is also attached
+to a draft GitHub release before npm publication; the GitHub release is made
+public only after npm succeeds.
+
+Re-running the same version is safe only when it still identifies the same
+artifact and release channel. Existing npm versions must have the same package
+integrity as the newly packed tarball and already be assigned to the requested
+`beta` or `latest` dist-tag. Existing draft GitHub releases may be resumed, but
+public releases are never modified: the workflow verifies npm state and the
+published GitHub tarball and exits successfully only when they already match.
+Any partial or mismatched public release fails for manual investigation instead
+of rewriting published state.
