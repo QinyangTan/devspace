@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { platform } from "node:os";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
@@ -19,6 +20,7 @@ test("stale clean worktrees at their base are removed without recovery refs", as
   const result = await cleanupManagedWorktrees({
     store: fixture.store,
     worktreeRoot: fixture.worktreeRoot,
+    allowedRoots: [fixture.root],
     staleBefore: futureCutoff(),
   });
 
@@ -42,6 +44,7 @@ test("detached commits remain reachable through a recovery ref", async (t) => {
   const result = await cleanupManagedWorktrees({
     store: fixture.store,
     worktreeRoot: fixture.worktreeRoot,
+    allowedRoots: [fixture.root],
     staleBefore: futureCutoff(),
   });
 
@@ -59,6 +62,7 @@ test("tracked worktree changes are snapshotted before cleanup", async (t) => {
   const result = await cleanupManagedWorktrees({
     store: fixture.store,
     worktreeRoot: fixture.worktreeRoot,
+    allowedRoots: [fixture.root],
     staleBefore: futureCutoff(),
   });
 
@@ -77,6 +81,7 @@ test("non-ignored untracked files keep a stale worktree alive", async (t) => {
   const result = await cleanupManagedWorktrees({
     store: fixture.store,
     worktreeRoot: fixture.worktreeRoot,
+    allowedRoots: [fixture.root],
     staleBefore: futureCutoff(),
   });
 
@@ -93,6 +98,7 @@ test("ignored worktree files are discarded during cleanup", async (t) => {
   const result = await cleanupManagedWorktrees({
     store: fixture.store,
     worktreeRoot: fixture.worktreeRoot,
+    allowedRoots: [fixture.root],
     staleBefore: futureCutoff(),
   });
 
@@ -106,6 +112,7 @@ test("recent managed worktrees are not considered for cleanup", async (t) => {
   const result = await cleanupManagedWorktrees({
     store: fixture.store,
     worktreeRoot: fixture.worktreeRoot,
+    allowedRoots: [fixture.root],
     staleBefore: new Date(0),
   });
 
@@ -120,6 +127,7 @@ test("missing worktree directories only clear stale persisted sessions", async (
   const result = await cleanupManagedWorktrees({
     store: fixture.store,
     worktreeRoot: fixture.worktreeRoot,
+    allowedRoots: [fixture.root],
     staleBefore: futureCutoff(),
   });
 
@@ -141,12 +149,39 @@ test("one broken stale session does not block cleanup of another", async (t) => 
   const result = await cleanupManagedWorktrees({
     store: fixture.store,
     worktreeRoot: fixture.worktreeRoot,
+    allowedRoots: [fixture.root],
     staleBefore: futureCutoff(),
   });
 
   assert.equal(result.removed.some((entry) => entry.workspaceId === "ws_good"), true);
   assert.equal(result.failed.some((entry) => entry.workspaceId === "ws_broken"), true);
   assert.ok(fixture.store.getSession("ws_broken"));
+});
+
+test("cleanup rejects a managed worktree path replaced by a symlink", { skip: platform() === "win32" }, async (t) => {
+  const fixture = await worktreeFixture(t, "ws_symlink");
+  const victimRoot = join(fixture.root, "victim");
+  await mkdir(victimRoot);
+  await writeFile(join(victimRoot, "KEEP.txt"), "keep\n");
+  await git(victimRoot, ["init"]);
+  await git(victimRoot, ["config", "user.email", "devspace@example.com"]);
+  await git(victimRoot, ["config", "user.name", "DevSpace Test"]);
+  await git(victimRoot, ["add", "."]);
+  await git(victimRoot, ["commit", "-m", "Victim commit"]);
+
+  await rm(fixture.worktreePath, { recursive: true, force: true });
+  await symlink(victimRoot, fixture.worktreePath, "dir");
+
+  const result = await cleanupManagedWorktrees({
+    store: fixture.store,
+    worktreeRoot: fixture.worktreeRoot,
+    allowedRoots: [fixture.root],
+    staleBefore: futureCutoff(),
+  });
+
+  assert.equal(result.failed.some((entry) => entry.workspaceId === "ws_symlink"), true);
+  assert.equal(await pathExists(join(victimRoot, "KEEP.txt")), true);
+  assert.equal(fixture.store.getSession("ws_symlink")?.status, "active");
 });
 
 interface WorktreeFixture {

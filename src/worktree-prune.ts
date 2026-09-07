@@ -15,6 +15,7 @@ export async function pruneStaleManagedWorktrees(
     return await cleanupManagedWorktrees({
       store,
       worktreeRoot: config.worktreeRoot,
+      allowedRoots: config.allowedRoots,
       staleBefore: new Date(now.getTime() - DEFAULT_MANAGED_WORKTREE_RETENTION_MS),
     });
   } finally {

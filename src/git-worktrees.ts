@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdir, realpath, rm, stat } from "node:fs/promises";
+import { lstat, mkdir, realpath, rm, stat } from "node:fs/promises";
 import { basename, join, relative, resolve } from "node:path";
 import type { ServerConfig } from "./config.js";
 import { assertAllowedPath, isPathInsideRoot } from "./roots.js";
@@ -113,6 +113,7 @@ export async function createManagedWorktree(input: {
 export async function cleanupManagedWorktrees(input: {
   store: WorkspaceStore;
   worktreeRoot: string;
+  allowedRoots: string[];
   staleBefore: Date;
 }): Promise<ManagedWorktreeCleanupResult> {
   const result: ManagedWorktreeCleanupResult = {
@@ -138,6 +139,8 @@ export async function cleanupManagedWorktrees(input: {
       if (!session.sourceRoot) {
         throw new Error(`Stored managed worktree is missing sourceRoot: ${session.id}`);
       }
+      const sourceRoot = await assertCleanupSourceRootAllowed(session.sourceRoot, input.allowedRoots);
+      await assertManagedWorktreePath(worktreePath, input.worktreeRoot);
 
       const status = await git(
         ["status", "--porcelain=v1", "--untracked-files=normal", "--ignored=no"],
@@ -165,15 +168,13 @@ export async function cleanupManagedWorktrees(input: {
 
       const recoveryRef = recoverySha ? managedWorktreeRecoveryRef(session.id) : undefined;
       if (recoveryRef && recoverySha) {
-        await git(["update-ref", recoveryRef, recoverySha], session.sourceRoot);
+        await git(["update-ref", recoveryRef, recoverySha], sourceRoot);
       }
 
-      if (hasTrackedChanges) {
-        await git(["reset", "--hard", "HEAD"], worktreePath);
-      }
-      // Ignored files are reproducible worktree-local state (dependencies, build output, caches).
-      await git(["clean", "-fdX"], worktreePath);
-      await git(["worktree", "remove", worktreePath], session.sourceRoot);
+      // Revalidate immediately before the only destructive filesystem operation. Git also
+      // validates the registered worktree's .git file before force-removing dirty/ignored state.
+      await assertManagedWorktreePath(worktreePath, input.worktreeRoot);
+      await git(["worktree", "remove", "--force", worktreePath], sourceRoot);
       input.store.deleteSession(session.id);
       sessionRemoved = true;
       result.removed.push({ workspaceId: session.id, recoveryRef, recoverySha });
@@ -192,6 +193,37 @@ export async function cleanupManagedWorktrees(input: {
 
 export function managedWorktreeRecoveryRef(workspaceId: string): string {
   return `refs/devspace/recovery/${workspaceId}`;
+}
+
+async function assertManagedWorktreePath(worktreePath: string, worktreeRoot: string): Promise<void> {
+  const entry = await lstat(worktreePath);
+  if (entry.isSymbolicLink()) {
+    throw new Error(`Managed worktree path was replaced by a symbolic link: ${worktreePath}`);
+  }
+  if (!entry.isDirectory()) {
+    throw new Error(`Managed worktree path is not a directory: ${worktreePath}`);
+  }
+
+  const [canonicalPath, canonicalRoot] = await Promise.all([
+    realpath(worktreePath),
+    realpath(worktreeRoot),
+  ]);
+  if (!isPathInsideRoot(canonicalPath, canonicalRoot)) {
+    throw new Error(`Managed worktree resolves outside the configured worktree root: ${worktreePath}`);
+  }
+}
+
+async function assertCleanupSourceRootAllowed(sourceRoot: string, allowedRoots: string[]): Promise<string> {
+  const logicalRoot = assertAllowedPath(sourceRoot, allowedRoots);
+  const canonicalSourceRoot = await realpath(logicalRoot);
+  for (const allowedRoot of allowedRoots) {
+    const canonicalAllowedRoot = await realpath(allowedRoot).catch(() => undefined);
+    if (canonicalAllowedRoot && isPathInsideRoot(canonicalSourceRoot, canonicalAllowedRoot)) {
+      return canonicalSourceRoot;
+    }
+  }
+
+  throw new Error(`Stored managed worktree source resolves outside allowed roots: ${sourceRoot}`);
 }
 
 async function resolveGitRoot(path: string, allowedRoots: string[]): Promise<string> {
