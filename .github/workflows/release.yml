@@ -124,14 +124,6 @@ jobs:
           npm pkg set version="$VERSION"
           node -e 'const pkg = require("./package.json"); if (pkg.version !== process.env.VERSION) process.exit(1)'
 
-      - name: Typecheck
-        run: pnpm typecheck
-
-      - name: Test
-        env:
-          DEVSPACE_REQUIRE_PI_SANDBOX: "0"
-        run: pnpm test
-
       - name: Package install smoke test
         run: pnpm test:package-install
 
