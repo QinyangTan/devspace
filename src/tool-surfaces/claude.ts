@@ -36,7 +36,7 @@ export function registerClaudeTools(context: ToolRegistrationContext): void {
   registerShellTool(context);
 }
 
-const CLAUDE_SHELL_DESCRIPTION = `Run a shell command with the local user's authority. Commands are not sandboxed; workspace validation only selects the initial working directory. Use this for file inspection, tests, builds, package scripts, and other commands.`;
+const CLAUDE_SHELL_DESCRIPTION = "Run a shell command in a workspace with the user's local permissions.";
 
 function registerClaudeMutationTools(context: ToolRegistrationContext): void {
   const { server, config, workspaces } = context;
@@ -45,7 +45,7 @@ function registerClaudeMutationTools(context: ToolRegistrationContext): void {
     toolNames.write,
     {
       title: "Write file",
-      description: `Create or completely overwrite a file in a workspace. Prefer ${toolNames.edit} for targeted changes to existing files.`,
+      description: "Create or completely overwrite a file in a workspace.",
       inputSchema: {
         workspaceId: z.string().describe(workspaceIdDescription),
         path: z
@@ -100,7 +100,8 @@ function registerClaudeMutationTools(context: ToolRegistrationContext): void {
     toolNames.edit,
     {
       title: "Edit file",
-      description: `Edit one file in a workspace by replacing exact text blocks. Prefer this over ${toolNames.write} for targeted changes. Each oldText must match a unique, non-overlapping region of the original file; merge nearby changes into one edit and keep oldText as small as possible while still unique.`,
+      description:
+        "Edit one file in a workspace by replacing exact text blocks. Each oldText must match a unique, non-overlapping region of the original file.",
       inputSchema: {
         workspaceId: z.string().describe(workspaceIdDescription),
         path: z
