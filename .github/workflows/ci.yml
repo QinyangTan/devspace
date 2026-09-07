@@ -21,10 +21,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os:
-          - ubuntu-latest
-          - macos-latest
-          - windows-latest
+        os: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-latest","macos-latest","windows-latest"]' || '["ubuntu-latest"]') }}
 
     env:
       DEVSPACE_OAUTH_OWNER_TOKEN: ci-owner-token-that-is-long-enough
