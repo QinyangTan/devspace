@@ -39,6 +39,7 @@ Run `devspace init` to create both files. `devspace config set publicBaseUrl
   },
   "tools": {
     "mode": "codex",
+    "fileRead": "tool",
   },
   "ui": {
     "enabled": true,
@@ -86,6 +87,12 @@ rejected so spelling mistakes cannot silently alter behavior.
 | --- | --- |
 | `codex` | Default. `open_workspace`, `read`, `apply_patch`, `exec_cmd`, `write_stdin`, and `show_changes`. |
 | `claude` | `open_workspace`, `read`, `write`, `edit`, `bash`, and `show_changes`. |
+
+`tools.fileRead` controls how file contents are inspected. The default `tool`
+value exposes the dedicated `read` tool. Set it to `shell` to omit `read` and
+use the active shell tool instead: `exec_cmd` in Codex mode or `bash` in Claude
+mode. This also directs workspace instruction and skill reads through that
+shell tool.
 
 The dedicated MCP tools `grep`, `glob`, and `ls` are not exposed. Each mode uses
 its shell tool with programs such as `rg`, `find`, and `ls` when it needs those
