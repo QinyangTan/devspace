@@ -27,7 +27,8 @@ test("stale clean worktrees at their base are removed without recovery refs", as
   assert.equal(result.removed.length, 1);
   assert.equal(result.removed[0]?.recoverySha, undefined);
   assert.equal(await pathExists(fixture.worktreePath), false);
-  assert.equal(fixture.store.getSession("ws_clean"), undefined);
+  assert.equal(fixture.store.getSession("ws_clean")?.status, "pruned");
+  assert.equal(fixture.store.getSession("ws_clean")?.recoveryKind, undefined);
   await assert.rejects(() => git(
     fixture.sourceRoot,
     ["show-ref", "--verify", managedWorktreeRecoveryRef("ws_clean")],
@@ -49,6 +50,8 @@ test("detached commits remain reachable through a recovery ref", async (t) => {
   });
 
   assert.equal(result.removed[0]?.recoverySha, head);
+  assert.equal(fixture.store.getSession("ws_committed")?.status, "pruned");
+  assert.equal(fixture.store.getSession("ws_committed")?.recoveryKind, "head");
   assert.equal(
     await git(fixture.sourceRoot, ["show", `${managedWorktreeRecoveryRef("ws_committed")}:committed.txt`]),
     "kept",
@@ -68,6 +71,8 @@ test("tracked worktree changes are snapshotted before cleanup", async (t) => {
 
   assert.equal(result.removed.length, 1);
   assert.equal(await pathExists(fixture.worktreePath), false);
+  assert.equal(fixture.store.getSession("ws_dirty")?.status, "pruned");
+  assert.equal(fixture.store.getSession("ws_dirty")?.recoveryKind, "stash");
   assert.equal(
     await git(fixture.sourceRoot, ["show", `${managedWorktreeRecoveryRef("ws_dirty")}:README.md`]),
     "changed in worktree",

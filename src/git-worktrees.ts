@@ -5,7 +5,7 @@ import { lstat, mkdir, realpath, rm, stat } from "node:fs/promises";
 import { basename, join, relative, resolve } from "node:path";
 import type { ServerConfig } from "./config.js";
 import { assertAllowedPath, isPathInsideRoot } from "./roots.js";
-import type { WorkspaceStore } from "./workspace-store.js";
+import type { WorkspaceRecoveryKind, WorkspaceStore } from "./workspace-store.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -149,6 +149,7 @@ export async function cleanupManagedWorktrees(input: {
       const hasTrackedChanges = status.trim().length > 0;
       const headSha = (await git(["rev-parse", "HEAD"], worktreePath)).trim();
       let recoverySha: string | undefined;
+      let recoveryKind: WorkspaceRecoveryKind | undefined;
       if (hasTrackedChanges) {
         recoverySha = (await git(
           ["stash", "create", `DevSpace recovery ${session.id}`],
@@ -157,8 +158,10 @@ export async function cleanupManagedWorktrees(input: {
         if (!recoverySha) {
           throw new Error(`Git could not snapshot tracked changes for ${session.id}.`);
         }
+        recoveryKind = "stash";
       } else if (!session.baseSha || headSha !== session.baseSha) {
         recoverySha = headSha;
+        recoveryKind = "head";
       }
 
       const recoveryRef = recoverySha ? managedWorktreeRecoveryRef(session.id) : undefined;
@@ -170,7 +173,7 @@ export async function cleanupManagedWorktrees(input: {
       // validates the registered worktree's .git file before force-removing dirty/ignored state.
       await assertManagedWorktreePath(worktreePath, input.worktreeRoot);
       await git(["worktree", "remove", "--force", worktreePath], sourceRoot);
-      input.store.deleteSession(session.id);
+      input.store.markSessionPruned(session.id, recoveryKind);
       result.removed.push({ workspaceId: session.id, recoveryRef, recoverySha });
     } catch (error) {
       result.failed.push({
