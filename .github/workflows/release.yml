@@ -99,6 +99,26 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Validate stable version progression
+        if: steps.release.outputs.prerelease != 'true'
+        run: |
+          package_name="$(node -p 'require("./package.json").name')"
+          source_version="$(node -p 'require("./package.json").version')"
+          latest_version="$(npm view "$package_name" dist-tags.latest)"
+          node --input-type=module - "$VERSION" "$source_version" "$latest_version" <<'NODE'
+          import semver from "semver"
+
+          const [candidate, source, latest] = process.argv.slice(2)
+          if (!semver.valid(source) || !semver.valid(latest)) {
+            console.error(`Stable release baseline is invalid: source=${source}, npm@latest=${latest}`)
+            process.exit(1)
+          }
+          if (semver.lt(candidate, source) || semver.lt(candidate, latest)) {
+            console.error(`Stable release ${candidate} would regress source ${source} or npm@latest ${latest}`)
+            process.exit(1)
+          }
+          NODE
+
       - name: Set package version
         run: |
           npm pkg set version="$VERSION"
