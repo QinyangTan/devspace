@@ -3,13 +3,14 @@ import type { Stats } from "node:fs";
 import type {
   WorkspaceConversationBinding,
   WorkspaceMode,
+  WorkspaceSession,
   WorkspaceStore,
 } from "./workspace-store.js";
 import { mkdir, opendir, readFile, realpath, stat } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { loadProjectContextFiles } from "@earendil-works/pi-coding-agent";
 import type { ServerConfig } from "./config.js";
-import { createManagedWorktree } from "./git-worktrees.js";
+import { createManagedWorktree, restoreManagedWorktree } from "./git-worktrees.js";
 import {
   AccessDeniedError,
   assertAllowedPath,
@@ -216,7 +217,7 @@ export class WorkspaceRegistry {
       throw error;
     }
 
-    const workspace = this.getWorkspace(binding.workspaceSessionId);
+    const workspace = await this.getWorkspace(binding.workspaceSessionId);
     if (workspace.mode !== "checkout" || workspace.root !== root) return undefined;
     return workspace;
   }
@@ -244,19 +245,22 @@ export class WorkspaceRegistry {
     };
   }
 
-  getWorkspace(workspaceId: string): Workspace {
+  async getWorkspace(workspaceId: string): Promise<Workspace> {
     const workspace = this.workspaces.get(workspaceId);
     if (workspace) {
-      if (this.store && !this.store.touchSession(workspaceId)) {
+      if (!this.store || this.store.touchSession(workspaceId)) {
         this.workspaces.delete(workspaceId);
-        throw unavailableWorkspaceError(workspaceId);
+        this.workspaces.set(workspaceId, workspace);
+        return workspace;
       }
       this.workspaces.delete(workspaceId);
-      this.workspaces.set(workspaceId, workspace);
-      return workspace;
     }
 
-    const session = this.store?.getSession(workspaceId);
+    let session = this.store?.getSession(workspaceId);
+    if (session?.status === "pruned") {
+      await this.restorePrunedWorkspace(session);
+      session = this.store?.getSession(workspaceId);
+    }
     if (!session || session.status !== "active") {
       throw unavailableWorkspaceError(workspaceId);
     }
@@ -288,6 +292,21 @@ export class WorkspaceRegistry {
     this.rememberWorkspace(restoredWorkspace);
 
     return restoredWorkspace;
+  }
+
+  private async restorePrunedWorkspace(session: WorkspaceSession): Promise<void> {
+    if (!this.store || session.mode !== "worktree" || !session.managed) {
+      throw unavailableWorkspaceError(session.id);
+    }
+
+    await restoreManagedWorktree({
+      session,
+      worktreeRoot: this.config.worktreeRoot,
+      allowedRoots: this.config.allowedRoots,
+    });
+    if (!this.store.reactivateSession(session.id)) {
+      throw new Error(`Restored workspace ${session.id}, but its persisted session could not be reactivated.`);
+    }
   }
 
   resolvePath(workspace: Workspace, inputPath: string): string {

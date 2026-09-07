@@ -9,6 +9,7 @@ import { promisify } from "node:util";
 import {
   cleanupManagedWorktrees,
   managedWorktreeRecoveryRef,
+  restoreManagedWorktree,
 } from "./git-worktrees.js";
 import { SqliteWorkspaceStore } from "./workspace-store.js";
 
@@ -33,6 +34,15 @@ test("stale clean worktrees at their base are removed without recovery refs", as
     fixture.sourceRoot,
     ["show-ref", "--verify", managedWorktreeRecoveryRef("ws_clean")],
   ));
+
+  const session = fixture.store.getSession("ws_clean");
+  assert.ok(session);
+  await restoreManagedWorktree({
+    session,
+    worktreeRoot: fixture.worktreeRoot,
+    allowedRoots: [fixture.root],
+  });
+  assert.equal(await git(fixture.worktreePath, ["rev-parse", "HEAD"]), session.baseSha);
 });
 
 test("detached commits remain reachable through a recovery ref", async (t) => {
@@ -56,6 +66,15 @@ test("detached commits remain reachable through a recovery ref", async (t) => {
     await git(fixture.sourceRoot, ["show", `${managedWorktreeRecoveryRef("ws_committed")}:committed.txt`]),
     "kept",
   );
+
+  const session = fixture.store.getSession("ws_committed");
+  assert.ok(session);
+  await restoreManagedWorktree({
+    session,
+    worktreeRoot: fixture.worktreeRoot,
+    allowedRoots: [fixture.root],
+  });
+  assert.equal(await git(fixture.worktreePath, ["show", "HEAD:committed.txt"]), "kept");
 });
 
 test("tracked worktree changes are snapshotted before cleanup", async (t) => {
@@ -77,6 +96,15 @@ test("tracked worktree changes are snapshotted before cleanup", async (t) => {
     await git(fixture.sourceRoot, ["show", `${managedWorktreeRecoveryRef("ws_dirty")}:README.md`]),
     "changed in worktree",
   );
+
+  const session = fixture.store.getSession("ws_dirty");
+  assert.ok(session);
+  await restoreManagedWorktree({
+    session,
+    worktreeRoot: fixture.worktreeRoot,
+    allowedRoots: [fixture.root],
+  });
+  assert.equal(await git(fixture.worktreePath, ["status", "--short"]), "M README.md");
 });
 
 test("non-ignored untracked files keep a stale worktree alive", async (t) => {

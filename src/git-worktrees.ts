@@ -5,7 +5,11 @@ import { lstat, mkdir, realpath, rm, stat } from "node:fs/promises";
 import { basename, join, relative, resolve } from "node:path";
 import type { ServerConfig } from "./config.js";
 import { assertAllowedPath, isPathInsideRoot } from "./roots.js";
-import type { WorkspaceRecoveryKind, WorkspaceStore } from "./workspace-store.js";
+import type {
+  WorkspaceRecoveryKind,
+  WorkspaceSession,
+  WorkspaceStore,
+} from "./workspace-store.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -184,6 +188,50 @@ export async function cleanupManagedWorktrees(input: {
   }
 
   return result;
+}
+
+export async function restoreManagedWorktree(input: {
+  session: WorkspaceSession;
+  worktreeRoot: string;
+  allowedRoots: string[];
+}): Promise<void> {
+  const { session } = input;
+  if (session.mode !== "worktree" || !session.managed || !session.sourceRoot) {
+    throw new Error(`Workspace ${session.id} is not a recoverable managed worktree.`);
+  }
+
+  const worktreePath = assertAllowedPath(session.root, [input.worktreeRoot]);
+  if (await isDirectory(worktreePath)) {
+    throw new Error(`Cannot restore workspace ${session.id} because its worktree path already exists.`);
+  }
+
+  const sourceRoot = await assertCleanupSourceRootAllowed(session.sourceRoot, input.allowedRoots);
+  await mkdir(input.worktreeRoot, { recursive: true });
+
+  const recoveryRef = managedWorktreeRecoveryRef(session.id);
+  const restoreRef = session.recoveryKind === "stash"
+    ? `${recoveryRef}^1`
+    : session.recoveryKind === "head"
+      ? recoveryRef
+      : session.baseSha;
+  if (!restoreRef) {
+    throw new Error(`Cannot restore workspace ${session.id} because its base commit is unknown.`);
+  }
+
+  let created = false;
+  try {
+    await git(["worktree", "add", "--detach", worktreePath, restoreRef], sourceRoot);
+    created = true;
+    if (session.recoveryKind === "stash") {
+      await git(["stash", "apply", "--index", recoveryRef], worktreePath);
+    }
+  } catch (error) {
+    if (created) {
+      await git(["worktree", "remove", "--force", worktreePath], sourceRoot).catch(() => undefined);
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Failed to restore workspace ${session.id}: ${message}`);
+  }
 }
 
 export function managedWorktreeRecoveryRef(workspaceId: string): string {
