@@ -242,10 +242,8 @@ jobs:
       - name: Setup npm trusted publishing
         if: steps.publication.outputs.complete != 'true' && steps.publication.outputs.npm_exists != 'true'
         run: |
-          npm install --global npm@11.8.0
-          npm config set registry https://registry.npmjs.org/
           node_version="$(node -p 'process.versions.node')"
-          npm_version="$(npm --version)"
+          npm_version="$(npx --yes npm@11.8.0 --version)"
           echo "Node.js $node_version"
           echo "npm $npm_version"
           node -e 'const [major, minor] = process.versions.node.split(".").map(Number); if (major < 22 || (major === 22 && minor < 14)) process.exit(1)'
@@ -253,13 +251,14 @@ jobs:
             echo "Expected npm 11.8.0 for trusted publishing; resolved npm $npm_version." >&2
             exit 1
           fi
+          npx --yes npm@11.8.0 config set registry https://registry.npmjs.org/
 
       - name: Publish npm package
         if: steps.publication.outputs.complete != 'true' && steps.publication.outputs.npm_exists != 'true'
         env:
           NPM_TAG: ${{ steps.release.outputs.npm_tag }}
           TARBALL: ${{ steps.pack.outputs.tarball }}
-        run: npm publish "$TARBALL" --access public --tag "$NPM_TAG" --provenance
+        run: npx --yes npm@11.8.0 publish "$TARBALL" --access public --tag "$NPM_TAG" --provenance
 
       - name: Publish GitHub release
         if: steps.publication.outputs.complete != 'true'
