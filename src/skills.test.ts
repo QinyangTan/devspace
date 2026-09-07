@@ -211,7 +211,7 @@ try {
     server: { port: 1 },
     workspaces: { allowedRoots: [projectRoot] },
     skills: { agentDir },
-    subagents: { enabled: true, providers: [] },
+    subagents: { enabled: true, instructions: "on-demand", providers: [] },
   }));
   const experimentalSkills = loadWorkspaceSkills(experimentalConfig, projectRoot).skills;
   const managedSubagents = experimentalSkills.find((skill) => skill.name === "subagents");

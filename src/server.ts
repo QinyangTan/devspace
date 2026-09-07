@@ -453,8 +453,15 @@ function registerMcpSurface(
         workspaceId: workspace.id,
         root: workspace.root,
       });
+      const preloadSubagents = config.subagents.enabled
+        && config.subagents.instructions === "preload";
+      const subagentsSkill = workspace.skills.find((skill) => skill.name === "subagents");
+      const preloadedSubagentInstructions = preloadSubagents && subagentsSkill
+        ? readFileSync(subagentsSkill.filePath, "utf8")
+        : undefined;
       const cardSkills = workspace.skills
         .filter((skill) => !skill.disableModelInvocation)
+        .filter((skill) => !(preloadSubagents && skill.name === "subagents"))
         .map((skill) => ({
           name: skill.name,
           description: skill.description,
@@ -489,7 +496,7 @@ function registerMcpSurface(
       const cardInstruction = config.skillsEnabled
         ? "Use this workspaceId for subsequent work in this project. Keep reusing it while working in this project. Follow loaded agentsFiles instructions. Before working under a path listed in availableAgentsFiles, read that instruction file. When a task matches an available skill in skills, read its path before proceeding."
         : "Use this workspaceId for subsequent work in this project. Keep reusing it while working in this project. Follow loaded agentsFiles instructions. Before working under a path listed in availableAgentsFiles, read that instruction file.";
-      const instruction = workspaceReused
+      const workspaceInstruction = workspaceReused
         ? [
             `Workspace already open as ${workspace.id}.`,
             "Continue with this workspaceId.",
@@ -498,6 +505,13 @@ function registerMcpSurface(
         : workspace.mode === "worktree"
           ? "Use this workspaceId for subsequent work in this isolated worktree. Keep reusing it while working in this worktree. Follow the project instructions, nested instruction files, skills, agent profiles, and diagnostics returned for it."
           : cardInstruction;
+      const instruction = preloadedSubagentInstructions && includeBootstrapContext
+        ? [
+            workspaceInstruction,
+            "Subagent workflow instructions:",
+            preloadedSubagentInstructions,
+          ].join("\n\n")
+        : workspaceInstruction;
       const resultContent: ToolContent[] = [
         {
           type: "text" as const,
