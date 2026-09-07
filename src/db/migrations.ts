@@ -259,11 +259,6 @@ function migrateWorkspacePruneClaims(sqlite: Database.Database): void {
 
   addColumnIfMissing(sqlite, "workspace_sessions", "prune_claim_owner", "text");
   addColumnIfMissing(sqlite, "workspace_sessions", "prune_claim_expires_at", "text");
-  sqlite.exec(`
-    update workspace_sessions
-    set status = 'active', prune_claim_owner = null, prune_claim_expires_at = null
-    where status = 'pruning'
-  `);
 }
 
 function addColumnIfMissing(
