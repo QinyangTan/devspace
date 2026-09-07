@@ -119,11 +119,13 @@ versions into `package.json`, validates and packs that exact source commit,
 publishes the resulting tarball to npm, and then publishes the matching GitHub
 release. Prerelease version changes are not committed back to `main`.
 
-Stable releases are different: `package.json` must already contain the stable
-version being published. Land that normal version update on `main`, let CI pass,
-then dispatch the Release workflow with the same version. This keeps the source
-tree aligned with the latest stable release without creating version commits for
-every beta or release candidate.
+Stable releases use the same temporary version change while building and
+publishing. After npm and GitHub publication both succeed, the workflow commits
+the released version back to `main` as `chore(release): prepare vX.Y.Z`. If
+`main` moved while the release was running, the version sync fails instead of
+overwriting concurrent work. This keeps the source tree aligned with the latest
+stable release without creating version commits for every beta or release
+candidate.
 
 ### npm trusted publishing setup
 
