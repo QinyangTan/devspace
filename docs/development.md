@@ -125,7 +125,8 @@ the released version back to `main` as `chore(release): prepare vX.Y.Z`. If
 `main` moved while the release was running, the version sync fails instead of
 overwriting concurrent work. This keeps the source tree aligned with the latest
 stable release without creating version commits for every beta or release
-candidate.
+candidate. A stable release is rejected if its version is lower than either the
+source version or npm's current `latest` version.
 
 ### npm trusted publishing setup
 
