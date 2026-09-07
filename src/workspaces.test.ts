@@ -156,34 +156,6 @@ test("persisted checkout and worktree sessions restore after recreating the regi
   }
 });
 
-test("a pruning claim prevents a cached worktree from becoming active again", async (t) => {
-  const context = await fixture(t);
-  const gitRoot = await createGitProject(context.root);
-  const stateDir = await mkdtemp(join(tmpdir(), "devspace-pruning-state-test-"));
-  const store = new SqliteWorkspaceStore(stateDir);
-  t.after(async () => {
-    store.close();
-    await rm(stateDir, { recursive: true, force: true });
-  });
-  const registry = new WorkspaceRegistry(context.config, store);
-  const opened = await registry.openWorkspace({ path: gitRoot, mode: "worktree" });
-
-  const now = new Date();
-  const claimed = store.claimStaleManagedWorktree({
-    id: opened.workspace.id,
-    before: new Date(now.getTime() + 60_000),
-    now,
-    owner: "test-owner",
-    expiresAt: new Date(now.getTime() + 60_000),
-  });
-  assert.equal(claimed?.status, "pruning");
-
-  assert.throws(
-    () => registry.getWorkspace(opened.workspace.id),
-    /Unknown workspaceId/,
-  );
-});
-
 test("invalid persisted roots are not refreshed before validation", async (t) => {
   const context = await fixture(t);
   const stateDir = await mkdtemp(join(tmpdir(), "devspace-invalid-root-state-test-"));

@@ -1,4 +1,4 @@
-import { and, eq, gt, lt, or } from "drizzle-orm";
+import { and, eq, lt } from "drizzle-orm";
 import { openDatabase, type DatabaseHandle } from "./db/client.js";
 import {
   workspaceConversationBindings,
@@ -41,17 +41,7 @@ export interface WorkspaceStore {
     managed?: boolean;
   }): WorkspaceSession;
   getSession(id: string): WorkspaceSession | undefined;
-  listStaleManagedWorktrees(before: Date, now?: Date): WorkspaceSession[];
-  claimStaleManagedWorktree(input: {
-    id: string;
-    before: Date;
-    now: Date;
-    owner: string;
-    expiresAt: Date;
-  }): WorkspaceSession | undefined;
-  renewPruningSession(id: string, owner: string, now: Date, expiresAt: Date): boolean;
-  releasePruningSession(id: string, owner: string): void;
-  deletePruningSession(id: string, owner: string): boolean;
+  listStaleManagedWorktrees(before: Date): WorkspaceSession[];
   touchSession(id: string): boolean;
   deleteSession(id: string): void;
   getConversationBinding(
@@ -127,113 +117,20 @@ export class SqliteWorkspaceStore implements WorkspaceStore {
     return row ? rowToWorkspaceSession(row) : undefined;
   }
 
-  listStaleManagedWorktrees(before: Date, now = new Date()): WorkspaceSession[] {
+  listStaleManagedWorktrees(before: Date): WorkspaceSession[] {
     return this.database.db
       .select()
       .from(workspaceSessions)
       .where(
         and(
+          eq(workspaceSessions.status, "active"),
           eq(workspaceSessions.mode, "worktree"),
           eq(workspaceSessions.managed, "true"),
-          or(
-            and(
-              eq(workspaceSessions.status, "active"),
-              lt(workspaceSessions.lastUsedAt, before.toISOString()),
-            ),
-            and(
-              eq(workspaceSessions.status, "pruning"),
-              lt(workspaceSessions.pruneClaimExpiresAt, now.toISOString()),
-            ),
-          ),
+          lt(workspaceSessions.lastUsedAt, before.toISOString()),
         ),
       )
       .all()
       .map(rowToWorkspaceSession);
-  }
-
-  claimStaleManagedWorktree(input: {
-    id: string;
-    before: Date;
-    now: Date;
-    owner: string;
-    expiresAt: Date;
-  }): WorkspaceSession | undefined {
-    const row = this.database.db
-      .update(workspaceSessions)
-      .set({
-        status: "pruning",
-        pruneClaimOwner: input.owner,
-        pruneClaimExpiresAt: input.expiresAt.toISOString(),
-      })
-      .where(
-        and(
-          eq(workspaceSessions.id, input.id),
-          eq(workspaceSessions.mode, "worktree"),
-          eq(workspaceSessions.managed, "true"),
-          or(
-            and(
-              eq(workspaceSessions.status, "active"),
-              lt(workspaceSessions.lastUsedAt, input.before.toISOString()),
-            ),
-            and(
-              eq(workspaceSessions.status, "pruning"),
-              lt(workspaceSessions.pruneClaimExpiresAt, input.now.toISOString()),
-            ),
-          ),
-        ),
-      )
-      .returning()
-      .get();
-
-    return row ? rowToWorkspaceSession(row) : undefined;
-  }
-
-  renewPruningSession(id: string, owner: string, now: Date, expiresAt: Date): boolean {
-    const result = this.database.db
-      .update(workspaceSessions)
-      .set({ pruneClaimExpiresAt: expiresAt.toISOString() })
-      .where(
-        and(
-          eq(workspaceSessions.id, id),
-          eq(workspaceSessions.status, "pruning"),
-          eq(workspaceSessions.pruneClaimOwner, owner),
-          gt(workspaceSessions.pruneClaimExpiresAt, now.toISOString()),
-        ),
-      )
-      .run();
-    return result.changes > 0;
-  }
-
-  releasePruningSession(id: string, owner: string): void {
-    this.database.db
-      .update(workspaceSessions)
-      .set({
-        status: "active",
-        pruneClaimOwner: null,
-        pruneClaimExpiresAt: null,
-      })
-      .where(
-        and(
-          eq(workspaceSessions.id, id),
-          eq(workspaceSessions.status, "pruning"),
-          eq(workspaceSessions.pruneClaimOwner, owner),
-        ),
-      )
-      .run();
-  }
-
-  deletePruningSession(id: string, owner: string): boolean {
-    const result = this.database.db
-      .delete(workspaceSessions)
-      .where(
-        and(
-          eq(workspaceSessions.id, id),
-          eq(workspaceSessions.status, "pruning"),
-          eq(workspaceSessions.pruneClaimOwner, owner),
-        ),
-      )
-      .run();
-    return result.changes > 0;
   }
 
   touchSession(id: string): boolean {

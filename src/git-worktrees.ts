@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { lstat, mkdir, realpath, rm, stat } from "node:fs/promises";
@@ -35,7 +35,6 @@ export interface ManagedWorktree {
 }
 
 export const DEFAULT_MANAGED_WORKTREE_RETENTION_MS = 3 * 24 * 60 * 60 * 1000;
-const MANAGED_WORKTREE_PRUNE_LEASE_MS = 60 * 60 * 1000;
 
 export interface ManagedWorktreeCleanupResult {
   removed: Array<{
@@ -124,26 +123,11 @@ export async function cleanupManagedWorktrees(input: {
     failed: [],
   };
 
-  for (const candidate of input.store.listStaleManagedWorktrees(input.staleBefore)) {
-    const claimOwner = randomUUID();
-    const claimStartedAt = new Date();
-    const session = input.store.claimStaleManagedWorktree({
-      id: candidate.id,
-      before: input.staleBefore,
-      now: claimStartedAt,
-      owner: claimOwner,
-      expiresAt: new Date(claimStartedAt.getTime() + MANAGED_WORKTREE_PRUNE_LEASE_MS),
-    });
-    if (!session) continue;
-
-    let sessionRemoved = false;
+  for (const session of input.store.listStaleManagedWorktrees(input.staleBefore)) {
     try {
       const worktreePath = assertAllowedPath(session.root, [input.worktreeRoot]);
       if (!(await isDirectory(worktreePath))) {
-        if (!input.store.deletePruningSession(session.id, claimOwner)) {
-          throw new Error(`Lost pruning claim for ${session.id}.`);
-        }
-        sessionRemoved = true;
+        input.store.deleteSession(session.id);
         result.missing.push(session.id);
         continue;
       }
@@ -178,7 +162,6 @@ export async function cleanupManagedWorktrees(input: {
       }
 
       const recoveryRef = recoverySha ? managedWorktreeRecoveryRef(session.id) : undefined;
-      renewPruningClaim(input.store, session.id, claimOwner);
       if (recoveryRef && recoverySha) {
         await git(["update-ref", recoveryRef, recoverySha], sourceRoot);
       }
@@ -186,36 +169,18 @@ export async function cleanupManagedWorktrees(input: {
       // Revalidate immediately before the only destructive filesystem operation. Git also
       // validates the registered worktree's .git file before force-removing dirty/ignored state.
       await assertManagedWorktreePath(worktreePath, input.worktreeRoot);
-      renewPruningClaim(input.store, session.id, claimOwner);
       await git(["worktree", "remove", "--force", worktreePath], sourceRoot);
-      if (!input.store.deletePruningSession(session.id, claimOwner)) {
-        throw new Error(`Lost pruning claim for ${session.id}.`);
-      }
-      sessionRemoved = true;
+      input.store.deleteSession(session.id);
       result.removed.push({ workspaceId: session.id, recoveryRef, recoverySha });
     } catch (error) {
       result.failed.push({
         workspaceId: session.id,
         error: error instanceof Error ? error.message : String(error),
       });
-    } finally {
-      if (!sessionRemoved) input.store.releasePruningSession(session.id, claimOwner);
     }
   }
 
   return result;
-}
-
-function renewPruningClaim(store: WorkspaceStore, workspaceId: string, owner: string): void {
-  const now = new Date();
-  if (!store.renewPruningSession(
-    workspaceId,
-    owner,
-    now,
-    new Date(now.getTime() + MANAGED_WORKTREE_PRUNE_LEASE_MS),
-  )) {
-    throw new Error(`Lost pruning claim for ${workspaceId}.`);
-  }
 }
 
 export function managedWorktreeRecoveryRef(workspaceId: string): string {
