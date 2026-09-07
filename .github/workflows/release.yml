@@ -64,11 +64,6 @@ jobs:
           if [[ "$VERSION" =~ $stable ]]; then
             npm_tag=latest
             is_prerelease=false
-            source_version="$(node -p 'require("./package.json").version')"
-            if [[ "$source_version" != "$VERSION" ]]; then
-              echo "Stable releases require package.json version $VERSION; found $source_version." >&2
-              exit 1
-            fi
           elif [[ "$VERSION" =~ $prerelease ]]; then
             npm_tag=beta
             is_prerelease=true
@@ -258,3 +253,28 @@ jobs:
           else
             gh release edit "$TAG" --draft=false --prerelease=false --latest
           fi
+
+      - name: Sync stable version to main
+        if: steps.release.outputs.prerelease != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git fetch origin main
+          remote_main="$(git rev-parse origin/main)"
+          if [[ "$remote_main" != "$GITHUB_SHA" ]]; then
+            echo "main moved from $GITHUB_SHA to $remote_main during the release; refusing to push a version sync commit." >&2
+            exit 1
+          fi
+
+          npm pkg set version="$VERSION"
+          if git diff --quiet -- package.json; then
+            echo "package.json already records $VERSION; no sync commit needed."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json
+          git commit -m "chore(release): prepare v$VERSION"
+          gh auth setup-git
+          git push origin HEAD:main
