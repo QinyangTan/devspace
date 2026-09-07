@@ -191,6 +191,37 @@ test("using a pruned workspace id restores its tracked worktree state", async (t
   assert.equal(await git(worktreePath, ["status", "--short"]), "MM README.md");
 });
 
+test("concurrent lookups share one pruned workspace restoration", async (t) => {
+  const context = await fixture(t);
+  const gitRoot = await createGitProject(context.root);
+  const stateDir = await mkdtemp(join(tmpdir(), "devspace-pruned-concurrent-state-test-"));
+  const store = new SqliteWorkspaceStore(stateDir);
+  t.after(async () => {
+    store.close();
+    await rm(stateDir, { recursive: true, force: true });
+  });
+  const registry = new WorkspaceRegistry(context.config, store);
+  const opened = await registry.openWorkspace({ path: gitRoot, mode: "worktree" });
+  const workspaceId = opened.workspace.id;
+
+  await cleanupManagedWorktrees({
+    store,
+    worktreeRoot: context.config.worktreeRoot,
+    allowedRoots: context.config.allowedRoots,
+    staleBefore: new Date(Date.now() + 60_000),
+  });
+
+  const [first, second] = await Promise.all([
+    registry.getWorkspace(workspaceId),
+    registry.getWorkspace(workspaceId),
+  ]);
+
+  assert.equal(first.id, workspaceId);
+  assert.equal(second.id, workspaceId);
+  assert.equal(first.root, second.root);
+  assert.equal(store.getSession(workspaceId)?.status, "active");
+});
+
 test("invalid persisted roots are not refreshed before validation", async (t) => {
   const context = await fixture(t);
   const stateDir = await mkdtemp(join(tmpdir(), "devspace-invalid-root-state-test-"));

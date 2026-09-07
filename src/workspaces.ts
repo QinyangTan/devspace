@@ -94,6 +94,7 @@ const MAX_CACHED_WORKSPACES = 32;
 export class WorkspaceRegistry {
   private readonly workspaces = new Map<string, Workspace>();
   private readonly pendingCheckoutOpens = new Map<string, Promise<WorkspaceContext>>();
+  private readonly pendingRestores = new Map<string, Promise<void>>();
 
   constructor(
     private readonly config: ServerConfig,
@@ -258,7 +259,7 @@ export class WorkspaceRegistry {
 
     let session = this.store?.getSession(workspaceId);
     if (session?.status === "pruned") {
-      await this.restorePrunedWorkspace(session);
+      await this.ensurePrunedWorkspaceRestored(session);
       session = this.store?.getSession(workspaceId);
     }
     if (!session || session.status !== "active") {
@@ -292,6 +293,24 @@ export class WorkspaceRegistry {
     this.rememberWorkspace(restoredWorkspace);
 
     return restoredWorkspace;
+  }
+
+  private async ensurePrunedWorkspaceRestored(session: WorkspaceSession): Promise<void> {
+    const pending = this.pendingRestores.get(session.id);
+    if (pending) {
+      await pending;
+      return;
+    }
+
+    const restore = this.restorePrunedWorkspace(session);
+    this.pendingRestores.set(session.id, restore);
+    try {
+      await restore;
+    } finally {
+      if (this.pendingRestores.get(session.id) === restore) {
+        this.pendingRestores.delete(session.id);
+      }
+    }
   }
 
   private async restorePrunedWorkspace(session: WorkspaceSession): Promise<void> {
