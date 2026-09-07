@@ -720,7 +720,7 @@ body {
 }
 
 .review-diff-file-header:hover {
-  background: color-mix(in srgb, var(--color-background-tertiary, #343434) 46%, var(--color-background-primary, #181818));
+  background: color-mix(in srgb, var(--color-background-tertiary, #343434) 62%, transparent);
 }
 
 .review-diff-file-name,
