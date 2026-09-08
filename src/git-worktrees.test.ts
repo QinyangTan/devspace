@@ -6,14 +6,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { promisify } from "node:util";
-import type { Result as BetterResult } from "better-result";
+import { Result, type Result as BetterResult } from "better-result";
 import {
   cleanupManagedWorktrees,
   ManagedWorktreeError,
   managedWorktreeRecoveryRef,
   restoreManagedWorktree,
 } from "./git-worktrees.js";
-import { SqliteWorkspaceStore } from "./workspace-store.js";
+import {
+  SqliteWorkspaceStore,
+  WorkspaceStoreError,
+  type WorkspaceRecoveryKind,
+} from "./workspace-store.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -180,6 +184,39 @@ test("one broken stale session does not block cleanup of another", async (t) => 
   assert.ok(fixture.store.getSession("ws_broken"));
 });
 
+test("prune persistence failure restores the removed worktree", async (t) => {
+  class FailPruneStore extends SqliteWorkspaceStore {
+    override markSessionPruned(
+      id: string,
+      _recoveryKind?: WorkspaceRecoveryKind,
+    ): BetterResult<void, WorkspaceStoreError> {
+      return Result.err(new WorkspaceStoreError(
+        "mark_session_pruned",
+        new Error("injected persistence failure"),
+        id,
+      ));
+    }
+  }
+
+  const fixture = await worktreeFixture(t, "ws_store_failure", {
+    createStore: (stateDir) => new FailPruneStore(stateDir),
+  });
+  await writeFile(join(fixture.worktreePath, "README.md"), "recover me\n");
+
+  const result = unwrap(await cleanupManagedWorktrees({
+    store: fixture.store,
+    worktreeRoot: fixture.worktreeRoot,
+    allowedRoots: [fixture.root],
+    staleBefore: futureCutoff(),
+  }));
+
+  assert.equal(result.failed.length, 1);
+  assert.equal(WorkspaceStoreError.is(result.failed[0]?.error), true);
+  assert.equal(await pathExists(fixture.worktreePath), true);
+  assert.equal(await git(fixture.worktreePath, ["status", "--short"]), "M README.md");
+  assert.equal(fixture.store.getSession("ws_store_failure")?.status, "active");
+});
+
 test("cleanup rejects a managed worktree path replaced by a symlink", { skip: platform() === "win32" }, async (t) => {
   const fixture = await worktreeFixture(t, "ws_symlink");
   const victimRoot = join(fixture.root, "victim");
@@ -217,7 +254,10 @@ interface WorktreeFixture {
 async function worktreeFixture(
   t: TestContext,
   workspaceId: string,
-  options: { gitignore?: string } = {},
+  options: {
+    gitignore?: string;
+    createStore?: (stateDir: string) => SqliteWorkspaceStore;
+  } = {},
 ): Promise<WorktreeFixture> {
   const root = await mkdtemp(join(tmpdir(), "devspace-worktree-cleanup-test-"));
   const sourceRoot = join(root, "repo");
@@ -235,7 +275,7 @@ async function worktreeFixture(
   await git(sourceRoot, ["commit", "-m", "Initial commit"]);
   await git(sourceRoot, ["worktree", "add", "--detach", worktreePath, "HEAD"]);
 
-  const store = new SqliteWorkspaceStore(stateDir);
+  const store = options.createStore?.(stateDir) ?? new SqliteWorkspaceStore(stateDir);
   store.createSession({
     id: workspaceId,
     root: worktreePath,

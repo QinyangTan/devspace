@@ -361,14 +361,14 @@ export class WorkspaceRegistry {
     if (restored.isErr()) return restored;
 
     const reactivated = this.store.reactivateSession(session.id);
-    if (reactivated.isErr()) return reactivated;
-    if (!reactivated.value) {
+    if (reactivated.isErr() || !reactivated.value) {
       const discarded = await discardRestoredManagedWorktree({
         session,
         worktreeRoot: this.config.worktreeRoot,
         allowedRoots: this.config.allowedRoots,
       });
       if (discarded.isErr()) return discarded;
+      if (reactivated.isErr()) return reactivated;
       return Result.err(new ManagedWorktreeError({
         code: "WORKTREE_RESTORE_FAILED",
         workspaceId: session.id,
