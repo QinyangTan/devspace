@@ -482,9 +482,9 @@ export function sandboxFor(writeMode: LocalAgentWriteMode | undefined): string {
   }
 }
 
-function sandboxPolicyFor(writeMode: LocalAgentWriteMode | undefined): Record<string, string> {
+function sandboxPolicyFor(writeMode: LocalAgentWriteMode | undefined): Record<string, string | boolean> {
   switch (writeMode) {
-    case "allowed": return { type: "workspaceWrite" };
+    case "allowed": return { type: "workspaceWrite", networkAccess: true };
     case "full_access": return { type: "dangerFullAccess" };
     case "read_only":
     case undefined: return { type: "readOnly" };
