@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import type { Result as BetterResult } from "better-result";
 import { SqliteWorkspaceStore } from "./workspace-store.js";
 
 test("workspace store lists only stale managed worktrees", async (t) => {
@@ -34,10 +35,10 @@ test("workspace store lists only stale managed worktrees", async (t) => {
   });
 
   assert.deepEqual(
-    store.listStaleManagedWorktrees(new Date(Date.now() + 60_000)).map((session) => session.id),
+    unwrap(store.listStaleManagedWorktrees(new Date(Date.now() + 60_000))).map((session) => session.id),
     [managed.id],
   );
-  assert.deepEqual(store.listStaleManagedWorktrees(new Date(0)), []);
+  assert.deepEqual(unwrap(store.listStaleManagedWorktrees(new Date(0))), []);
 });
 
 test("pruned worktree sessions retain recovery state and can be reactivated", async (t) => {
@@ -56,12 +57,17 @@ test("pruned worktree sessions retain recovery state and can be reactivated", as
     managed: true,
   });
 
-  store.markSessionPruned("ws_recoverable", "stash");
+  unwrap(store.markSessionPruned("ws_recoverable", "stash"));
   assert.equal(store.getSession("ws_recoverable")?.status, "pruned");
   assert.equal(store.getSession("ws_recoverable")?.recoveryKind, "stash");
-  assert.equal(store.touchSession("ws_recoverable"), false);
+  assert.equal(unwrap(store.touchSession("ws_recoverable")), false);
 
-  assert.equal(store.reactivateSession("ws_recoverable"), true);
+  assert.equal(unwrap(store.reactivateSession("ws_recoverable")), true);
   assert.equal(store.getSession("ws_recoverable")?.status, "active");
   assert.equal(store.getSession("ws_recoverable")?.recoveryKind, undefined);
 });
+
+function unwrap<T, E>(result: BetterResult<T, E>): T {
+  if (result.isErr()) throw result.error;
+  return result.value;
+}

@@ -6,8 +6,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { promisify } from "node:util";
+import type { Result as BetterResult } from "better-result";
 import {
   cleanupManagedWorktrees,
+  ManagedWorktreeError,
   managedWorktreeRecoveryRef,
   restoreManagedWorktree,
 } from "./git-worktrees.js";
@@ -18,12 +20,12 @@ const execFileAsync = promisify(execFile);
 test("stale clean worktrees at their base are removed without recovery refs", async (t) => {
   const fixture = await worktreeFixture(t, "ws_clean");
 
-  const result = await cleanupManagedWorktrees({
+  const result = unwrap(await cleanupManagedWorktrees({
     store: fixture.store,
     worktreeRoot: fixture.worktreeRoot,
     allowedRoots: [fixture.root],
     staleBefore: futureCutoff(),
-  });
+  }));
 
   assert.equal(result.removed.length, 1);
   assert.equal(result.removed[0]?.recoverySha, undefined);
@@ -37,11 +39,11 @@ test("stale clean worktrees at their base are removed without recovery refs", as
 
   const session = fixture.store.getSession("ws_clean");
   assert.ok(session);
-  await restoreManagedWorktree({
+  unwrap(await restoreManagedWorktree({
     session,
     worktreeRoot: fixture.worktreeRoot,
     allowedRoots: [fixture.root],
-  });
+  }));
   assert.equal(await git(fixture.worktreePath, ["rev-parse", "HEAD"]), session.baseSha);
 });
 
@@ -52,12 +54,12 @@ test("detached commits remain reachable through a recovery ref", async (t) => {
   await git(fixture.worktreePath, ["commit", "-m", "Worktree change"]);
   const head = await git(fixture.worktreePath, ["rev-parse", "HEAD"]);
 
-  const result = await cleanupManagedWorktrees({
+  const result = unwrap(await cleanupManagedWorktrees({
     store: fixture.store,
     worktreeRoot: fixture.worktreeRoot,
     allowedRoots: [fixture.root],
     staleBefore: futureCutoff(),
-  });
+  }));
 
   assert.equal(result.removed[0]?.recoverySha, head);
   assert.equal(fixture.store.getSession("ws_committed")?.status, "pruned");
@@ -69,11 +71,11 @@ test("detached commits remain reachable through a recovery ref", async (t) => {
 
   const session = fixture.store.getSession("ws_committed");
   assert.ok(session);
-  await restoreManagedWorktree({
+  unwrap(await restoreManagedWorktree({
     session,
     worktreeRoot: fixture.worktreeRoot,
     allowedRoots: [fixture.root],
-  });
+  }));
   assert.equal(await git(fixture.worktreePath, ["show", "HEAD:committed.txt"]), "kept");
 });
 
@@ -81,12 +83,12 @@ test("tracked worktree changes are snapshotted before cleanup", async (t) => {
   const fixture = await worktreeFixture(t, "ws_dirty");
   await writeFile(join(fixture.worktreePath, "README.md"), "changed in worktree\n");
 
-  const result = await cleanupManagedWorktrees({
+  const result = unwrap(await cleanupManagedWorktrees({
     store: fixture.store,
     worktreeRoot: fixture.worktreeRoot,
     allowedRoots: [fixture.root],
     staleBefore: futureCutoff(),
-  });
+  }));
 
   assert.equal(result.removed.length, 1);
   assert.equal(await pathExists(fixture.worktreePath), false);
@@ -99,11 +101,11 @@ test("tracked worktree changes are snapshotted before cleanup", async (t) => {
 
   const session = fixture.store.getSession("ws_dirty");
   assert.ok(session);
-  await restoreManagedWorktree({
+  unwrap(await restoreManagedWorktree({
     session,
     worktreeRoot: fixture.worktreeRoot,
     allowedRoots: [fixture.root],
-  });
+  }));
   assert.equal(await git(fixture.worktreePath, ["status", "--short"]), "M README.md");
 });
 
@@ -111,12 +113,12 @@ test("non-ignored untracked files keep a stale worktree alive", async (t) => {
   const fixture = await worktreeFixture(t, "ws_untracked");
   await writeFile(join(fixture.worktreePath, "new-file.ts"), "important work\n");
 
-  const result = await cleanupManagedWorktrees({
+  const result = unwrap(await cleanupManagedWorktrees({
     store: fixture.store,
     worktreeRoot: fixture.worktreeRoot,
     allowedRoots: [fixture.root],
     staleBefore: futureCutoff(),
-  });
+  }));
 
   assert.deepEqual(result.skipped, [{ workspaceId: "ws_untracked", reason: "untracked_files" }]);
   assert.equal(await pathExists(fixture.worktreePath), true);
@@ -128,12 +130,12 @@ test("ignored worktree files are discarded during cleanup", async (t) => {
   await mkdir(join(fixture.worktreePath, "cache"));
   await writeFile(join(fixture.worktreePath, "cache", "artifact.bin"), "reproducible\n");
 
-  const result = await cleanupManagedWorktrees({
+  const result = unwrap(await cleanupManagedWorktrees({
     store: fixture.store,
     worktreeRoot: fixture.worktreeRoot,
     allowedRoots: [fixture.root],
     staleBefore: futureCutoff(),
-  });
+  }));
 
   assert.equal(result.removed.length, 1);
   assert.equal(await pathExists(fixture.worktreePath), false);
@@ -143,12 +145,12 @@ test("missing worktree directories only clear stale persisted sessions", async (
   const fixture = await worktreeFixture(t, "ws_missing");
   await git(fixture.sourceRoot, ["worktree", "remove", fixture.worktreePath]);
 
-  const result = await cleanupManagedWorktrees({
+  const result = unwrap(await cleanupManagedWorktrees({
     store: fixture.store,
     worktreeRoot: fixture.worktreeRoot,
     allowedRoots: [fixture.root],
     staleBefore: futureCutoff(),
-  });
+  }));
 
   assert.deepEqual(result.missing, ["ws_missing"]);
   assert.equal(fixture.store.getSession("ws_missing"), undefined);
@@ -165,15 +167,16 @@ test("one broken stale session does not block cleanup of another", async (t) => 
     managed: true,
   });
 
-  const result = await cleanupManagedWorktrees({
+  const result = unwrap(await cleanupManagedWorktrees({
     store: fixture.store,
     worktreeRoot: fixture.worktreeRoot,
     allowedRoots: [fixture.root],
     staleBefore: futureCutoff(),
-  });
+  }));
 
   assert.equal(result.removed.some((entry) => entry.workspaceId === "ws_good"), true);
   assert.equal(result.failed.some((entry) => entry.workspaceId === "ws_broken"), true);
+  assert.equal(ManagedWorktreeError.is(result.failed[0]?.error), true);
   assert.ok(fixture.store.getSession("ws_broken"));
 });
 
@@ -191,12 +194,12 @@ test("cleanup rejects a managed worktree path replaced by a symlink", { skip: pl
   await rm(fixture.worktreePath, { recursive: true, force: true });
   await symlink(victimRoot, fixture.worktreePath, "dir");
 
-  const result = await cleanupManagedWorktrees({
+  const result = unwrap(await cleanupManagedWorktrees({
     store: fixture.store,
     worktreeRoot: fixture.worktreeRoot,
     allowedRoots: [fixture.root],
     staleBefore: futureCutoff(),
-  });
+  }));
 
   assert.equal(result.failed.some((entry) => entry.workspaceId === "ws_symlink"), true);
   assert.equal(await pathExists(join(victimRoot, "KEEP.txt")), true);
@@ -271,4 +274,9 @@ async function pathExists(path: string): Promise<boolean> {
     }
     throw error;
   }
+}
+
+function unwrap<T, E>(result: BetterResult<T, E>): T {
+  if (result.isErr()) throw result.error;
+  return result.value;
 }

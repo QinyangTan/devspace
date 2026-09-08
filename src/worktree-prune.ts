@@ -1,24 +1,31 @@
+import type { Result as BetterResult } from "better-result";
 import type { ServerConfig } from "./config.js";
 import {
   cleanupManagedWorktrees,
   DEFAULT_MANAGED_WORKTREE_RETENTION_MS,
   type ManagedWorktreeCleanupResult,
 } from "./git-worktrees.js";
-import { createWorkspaceStore } from "./workspace-store.js";
+import {
+  closeWorkspaceStoreResult,
+  createWorkspaceStoreResult,
+  type WorkspaceStoreError,
+} from "./workspace-store.js";
 
 export async function pruneStaleManagedWorktrees(
   config: ServerConfig,
   now = new Date(),
-): Promise<ManagedWorktreeCleanupResult> {
-  const store = createWorkspaceStore(config.stateDir);
-  try {
-    return await cleanupManagedWorktrees({
-      store,
-      worktreeRoot: config.worktreeRoot,
-      allowedRoots: config.allowedRoots,
-      staleBefore: new Date(now.getTime() - DEFAULT_MANAGED_WORKTREE_RETENTION_MS),
-    });
-  } finally {
-    store.close?.();
-  }
+): Promise<BetterResult<ManagedWorktreeCleanupResult, WorkspaceStoreError>> {
+  const opened = createWorkspaceStoreResult(config.stateDir);
+  if (opened.isErr()) return opened;
+
+  const result = await cleanupManagedWorktrees({
+    store: opened.value,
+    worktreeRoot: config.worktreeRoot,
+    allowedRoots: config.allowedRoots,
+    staleBefore: new Date(now.getTime() - DEFAULT_MANAGED_WORKTREE_RETENTION_MS),
+  });
+  const closed = closeWorkspaceStoreResult(opened.value);
+  if (result.isErr()) return result;
+  if (closed.isErr()) return closed;
+  return result;
 }

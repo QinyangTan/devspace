@@ -5,9 +5,13 @@ import { platform, tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { promisify } from "node:util";
+import { Result, type Result as BetterResult } from "better-result";
 import { loadConfig, type ServerConfig } from "./config.js";
 import { cleanupManagedWorktrees, GitWorktreeError } from "./git-worktrees.js";
-import { SqliteWorkspaceStore } from "./workspace-store.js";
+import {
+  SqliteWorkspaceStore,
+  type WorkspaceStoreError,
+} from "./workspace-store.js";
 import { WorkspaceRegistry } from "./workspaces.js";
 import { writeTestDevspaceConfig } from "./test-support/config.test.js";
 
@@ -174,12 +178,12 @@ test("using a pruned workspace id restores its tracked worktree state", async (t
   await git(worktreePath, ["add", "README.md"]);
   await writeFile(join(worktreePath, "README.md"), "staged\nunstaged\n");
 
-  await cleanupManagedWorktrees({
+  unwrap(await cleanupManagedWorktrees({
     store,
     worktreeRoot: context.config.worktreeRoot,
     allowedRoots: context.config.allowedRoots,
     staleBefore: new Date(Date.now() + 60_000),
-  });
+  }));
 
   assert.equal(store.getSession(workspaceId)?.status, "pruned");
   await assert.rejects(() => stat(worktreePath), /ENOENT/);
@@ -204,12 +208,12 @@ test("concurrent lookups share one pruned workspace restoration", async (t) => {
   const opened = await registry.openWorkspace({ path: gitRoot, mode: "worktree" });
   const workspaceId = opened.workspace.id;
 
-  await cleanupManagedWorktrees({
+  unwrap(await cleanupManagedWorktrees({
     store,
     worktreeRoot: context.config.worktreeRoot,
     allowedRoots: context.config.allowedRoots,
     staleBefore: new Date(Date.now() + 60_000),
-  });
+  }));
 
   const [first, second] = await Promise.all([
     registry.getWorkspace(workspaceId),
@@ -229,10 +233,10 @@ test("failed session reactivation does not strand a restored worktree", async (t
   class FailOnceStore extends SqliteWorkspaceStore {
     private failNextReactivation = true;
 
-    override reactivateSession(id: string): boolean {
+    override reactivateSession(id: string): BetterResult<boolean, WorkspaceStoreError> {
       if (this.failNextReactivation) {
         this.failNextReactivation = false;
-        return false;
+        return Result.ok(false);
       }
       return super.reactivateSession(id);
     }
@@ -247,12 +251,12 @@ test("failed session reactivation does not strand a restored worktree", async (t
   const workspaceId = opened.workspace.id;
   const worktreePath = opened.workspace.root;
 
-  await cleanupManagedWorktrees({
+  unwrap(await cleanupManagedWorktrees({
     store,
     worktreeRoot: context.config.worktreeRoot,
     allowedRoots: context.config.allowedRoots,
     staleBefore: new Date(Date.now() + 60_000),
-  });
+  }));
 
   await assert.rejects(
     () => registry.getWorkspace(workspaceId),
@@ -272,7 +276,7 @@ test("invalid persisted roots are not refreshed before validation", async (t) =>
   class TrackingStore extends SqliteWorkspaceStore {
     touches = 0;
 
-    override touchSession(id: string): boolean {
+    override touchSession(id: string): BetterResult<boolean, WorkspaceStoreError> {
       this.touches += 1;
       return super.touchSession(id);
     }
@@ -474,4 +478,9 @@ async function createGitProject(parent: string): Promise<string> {
 async function git(cwd: string, args: string[]): Promise<string> {
   const { stdout } = await execFileAsync("git", args, { cwd, encoding: "utf8" });
   return stdout.trim();
+}
+
+function unwrap<T, E>(result: BetterResult<T, E>): T {
+  if (result.isErr()) throw result.error;
+  return result.value;
 }

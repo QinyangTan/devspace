@@ -350,23 +350,30 @@ async function serve(): Promise<void> {
 }
 
 async function runStartupWorktreeCleanup(config: ServerConfig): Promise<void> {
-  try {
-    const result = await pruneStaleManagedWorktrees(config);
-    const preserved = result.removed.filter((entry) => entry.recoveryRef).length;
-    if (result.removed.length > 0 || result.missing.length > 0 || result.skipped.length > 0) {
-      logEvent(config.logging, "info", "managed_worktree_cleanup", {
-        removed: result.removed.length,
-        recoveryRefs: preserved,
-        missingSessions: result.missing.length,
-        skippedUntracked: result.skipped.length,
-      });
-    }
-    for (const failure of result.failed) {
-      logEvent(config.logging, "warn", "managed_worktree_cleanup_failed", failure);
-    }
-  } catch (error) {
+  const cleanup = await pruneStaleManagedWorktrees(config);
+  if (cleanup.isErr()) {
     logEvent(config.logging, "warn", "managed_worktree_cleanup_failed", {
-      error: error instanceof Error ? error.message : String(error),
+      error: cleanup.error.message,
+      operation: cleanup.error.operation,
+    });
+    return;
+  }
+
+  const result = cleanup.value;
+  const preserved = result.removed.filter((entry) => entry.recoveryRef).length;
+  if (result.removed.length > 0 || result.missing.length > 0 || result.skipped.length > 0) {
+    logEvent(config.logging, "info", "managed_worktree_cleanup", {
+      removed: result.removed.length,
+      recoveryRefs: preserved,
+      missingSessions: result.missing.length,
+      skippedUntracked: result.skipped.length,
+    });
+  }
+  for (const failure of result.failed) {
+    logEvent(config.logging, "warn", "managed_worktree_cleanup_failed", {
+      workspaceId: failure.workspaceId,
+      error: failure.error.message,
+      operation: failure.error.operation,
     });
   }
 }
@@ -434,7 +441,14 @@ async function runWorktreesCommand(args: string[]): Promise<void> {
     throw new Error("Usage: devspace worktrees prune");
   }
 
-  const result = await pruneStaleManagedWorktrees(loadConfig());
+  const cleanup = await pruneStaleManagedWorktrees(loadConfig());
+  if (cleanup.isErr()) {
+    console.warn(`Failed to prune managed worktrees: ${cleanup.error.message}`);
+    process.exitCode = 1;
+    return;
+  }
+
+  const result = cleanup.value;
   const preserved = result.removed.filter((entry) => entry.recoveryRef).length;
   console.log(`Pruned ${result.removed.length} stale managed worktree${result.removed.length === 1 ? "" : "s"}.`);
   if (preserved > 0) console.log(`Preserved ${preserved} recovery ref${preserved === 1 ? "" : "s"}.`);
@@ -445,7 +459,7 @@ async function runWorktreesCommand(args: string[]): Promise<void> {
     console.log(`Skipped ${result.skipped.length} worktree${result.skipped.length === 1 ? "" : "s"} with untracked files.`);
   }
   for (const failure of result.failed) {
-    console.warn(`Failed to prune ${failure.workspaceId}: ${failure.error}`);
+    console.warn(`Failed to prune ${failure.workspaceId}: ${failure.error.message}`);
   }
   if (result.failed.length > 0) process.exitCode = 1;
 }

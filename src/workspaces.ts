@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import type { Stats } from "node:fs";
+import { Result, type Result as BetterResult } from "better-result";
 import type {
   WorkspaceConversationBinding,
   WorkspaceMode,
@@ -13,7 +14,9 @@ import type { ServerConfig } from "./config.js";
 import {
   createManagedWorktree,
   discardRestoredManagedWorktree,
+  ManagedWorktreeError,
   restoreManagedWorktree,
+  type ManagedWorktreeFeatureError,
 } from "./git-worktrees.js";
 import {
   AccessDeniedError,
@@ -98,7 +101,10 @@ const MAX_CACHED_WORKSPACES = 32;
 export class WorkspaceRegistry {
   private readonly workspaces = new Map<string, Workspace>();
   private readonly pendingCheckoutOpens = new Map<string, Promise<WorkspaceContext>>();
-  private readonly pendingRestores = new Map<string, Promise<void>>();
+  private readonly pendingRestores = new Map<
+    string,
+    Promise<BetterResult<void, ManagedWorktreeFeatureError>>
+  >();
 
   constructor(
     private readonly config: ServerConfig,
@@ -253,7 +259,14 @@ export class WorkspaceRegistry {
   async getWorkspace(workspaceId: string): Promise<Workspace> {
     const workspace = this.workspaces.get(workspaceId);
     if (workspace) {
-      if (!this.store || this.store.touchSession(workspaceId)) {
+      if (!this.store) {
+        this.workspaces.delete(workspaceId);
+        this.workspaces.set(workspaceId, workspace);
+        return workspace;
+      }
+      const touched = this.store.touchSession(workspaceId);
+      if (touched.isErr()) throw touched.error;
+      if (touched.value) {
         this.workspaces.delete(workspaceId);
         this.workspaces.set(workspaceId, workspace);
         return workspace;
@@ -261,18 +274,30 @@ export class WorkspaceRegistry {
       this.workspaces.delete(workspaceId);
     }
 
-    let session = this.store?.getSession(workspaceId);
+    let session: WorkspaceSession | undefined;
+    if (this.store) {
+      const sessionLookup = this.store.getSessionResult(workspaceId);
+      if (sessionLookup.isErr()) throw sessionLookup.error;
+      session = sessionLookup.value;
+    }
     if (session?.status === "pruned") {
-      await this.ensurePrunedWorkspaceRestored(session);
-      session = this.store?.getSession(workspaceId);
+      const restored = await this.ensurePrunedWorkspaceRestored(session);
+      if (restored.isErr()) throw restored.error;
+      if (this.store) {
+        const restoredLookup = this.store.getSessionResult(workspaceId);
+        if (restoredLookup.isErr()) throw restoredLookup.error;
+        session = restoredLookup.value;
+      }
     }
     if (!session || session.status !== "active") {
       throw unavailableWorkspaceError(workspaceId);
     }
 
     const root = this.assertWorkspaceRootAllowed(session.root, session.mode, session.sourceRoot);
-    if (this.store && !this.store.touchSession(workspaceId)) {
-      throw unavailableWorkspaceError(workspaceId);
+    if (this.store) {
+      const touched = this.store.touchSession(workspaceId);
+      if (touched.isErr()) throw touched.error;
+      if (!touched.value) throw unavailableWorkspaceError(workspaceId);
     }
 
     const restoredWorkspace: Workspace = {
@@ -299,17 +324,16 @@ export class WorkspaceRegistry {
     return restoredWorkspace;
   }
 
-  private async ensurePrunedWorkspaceRestored(session: WorkspaceSession): Promise<void> {
+  private async ensurePrunedWorkspaceRestored(
+    session: WorkspaceSession,
+  ): Promise<BetterResult<void, ManagedWorktreeFeatureError>> {
     const pending = this.pendingRestores.get(session.id);
-    if (pending) {
-      await pending;
-      return;
-    }
+    if (pending) return pending;
 
     const restore = this.restorePrunedWorkspace(session);
     this.pendingRestores.set(session.id, restore);
     try {
-      await restore;
+      return await restore;
     } finally {
       if (this.pendingRestores.get(session.id) === restore) {
         this.pendingRestores.delete(session.id);
@@ -317,24 +341,43 @@ export class WorkspaceRegistry {
     }
   }
 
-  private async restorePrunedWorkspace(session: WorkspaceSession): Promise<void> {
+  private async restorePrunedWorkspace(
+    session: WorkspaceSession,
+  ): Promise<BetterResult<void, ManagedWorktreeFeatureError>> {
     if (!this.store || session.mode !== "worktree" || !session.managed) {
-      throw unavailableWorkspaceError(session.id);
+      return Result.err(new ManagedWorktreeError({
+        code: "WORKTREE_INVALID_STATE",
+        workspaceId: session.id,
+        operation: "reactivate",
+        message: unavailableWorkspaceError(session.id).message,
+      }));
     }
 
-    await restoreManagedWorktree({
+    const restored = await restoreManagedWorktree({
       session,
       worktreeRoot: this.config.worktreeRoot,
       allowedRoots: this.config.allowedRoots,
     });
-    if (!this.store.reactivateSession(session.id)) {
-      await discardRestoredManagedWorktree({
+    if (restored.isErr()) return restored;
+
+    const reactivated = this.store.reactivateSession(session.id);
+    if (reactivated.isErr()) return reactivated;
+    if (!reactivated.value) {
+      const discarded = await discardRestoredManagedWorktree({
         session,
         worktreeRoot: this.config.worktreeRoot,
         allowedRoots: this.config.allowedRoots,
       });
-      throw new Error(`Restored workspace ${session.id}, but its persisted session could not be reactivated.`);
+      if (discarded.isErr()) return discarded;
+      return Result.err(new ManagedWorktreeError({
+        code: "WORKTREE_RESTORE_FAILED",
+        workspaceId: session.id,
+        operation: "reactivate",
+        message: `Restored workspace ${session.id}, but its persisted session could not be reactivated.`,
+      }));
     }
+
+    return Result.ok(undefined);
   }
 
   resolvePath(workspace: Workspace, inputPath: string): string {
