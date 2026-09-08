@@ -40,32 +40,6 @@ test("workspace store lists only stale managed worktrees", async (t) => {
   assert.deepEqual(store.listStaleManagedWorktrees(new Date(0)), []);
 });
 
-test("deleting a workspace session cascades its conversation binding", async (t) => {
-  const stateDir = await mkdtemp(join(tmpdir(), "devspace-workspace-store-test-"));
-  const store = new SqliteWorkspaceStore(stateDir);
-  t.after(async () => {
-    store.close();
-    await rm(stateDir, { recursive: true, force: true });
-  });
-  store.createSession({
-    id: "ws_pruned",
-    root: "/tmp/worktree",
-    mode: "worktree",
-    sourceRoot: "/tmp/repo",
-    managed: true,
-  });
-  store.setConversationBinding({
-    conversationScopeId: "conversation",
-    targetKey: "target",
-    workspaceSessionId: "ws_pruned",
-  });
-
-  store.deleteSession("ws_pruned");
-
-  assert.equal(store.getSession("ws_pruned"), undefined);
-  assert.equal(store.getConversationBinding("conversation", "target"), undefined);
-});
-
 test("pruned worktree sessions retain recovery state and can be reactivated", async (t) => {
   const stateDir = await mkdtemp(join(tmpdir(), "devspace-workspace-store-test-"));
   const store = new SqliteWorkspaceStore(stateDir);

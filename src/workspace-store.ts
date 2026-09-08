@@ -8,12 +8,13 @@ import {
 } from "./db/schema.js";
 
 export type WorkspaceMode = "checkout" | "worktree";
+export type WorkspaceStatus = "active" | "pruned";
 export type WorkspaceRecoveryKind = "head" | "stash";
 
 export interface WorkspaceSession {
   id: string;
   root: string;
-  status: string;
+  status: WorkspaceStatus;
   mode: WorkspaceMode;
   sourceRoot?: string;
   baseRef?: string;
@@ -279,7 +280,7 @@ function rowToWorkspaceSession(row: WorkspaceSessionRow): WorkspaceSession {
   return {
     id: row.id,
     root: row.root,
-    status: row.status,
+    status: readWorkspaceStatus(row.status),
     mode: row.mode === "worktree" ? "worktree" : "checkout",
     sourceRoot: row.sourceRoot ?? undefined,
     baseRef: row.baseRef ?? undefined,
@@ -292,6 +293,11 @@ function rowToWorkspaceSession(row: WorkspaceSessionRow): WorkspaceSession {
     createdAt: row.createdAt,
     lastUsedAt: row.lastUsedAt,
   };
+}
+
+function readWorkspaceStatus(status: string): WorkspaceStatus {
+  if (status === "active" || status === "pruned") return status;
+  throw new Error(`Unknown workspace session status: ${status}`);
 }
 
 function rowToWorkspaceConversationBinding(

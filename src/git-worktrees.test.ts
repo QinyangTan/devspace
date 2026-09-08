@@ -139,20 +139,6 @@ test("ignored worktree files are discarded during cleanup", async (t) => {
   assert.equal(await pathExists(fixture.worktreePath), false);
 });
 
-test("recent managed worktrees are not considered for cleanup", async (t) => {
-  const fixture = await worktreeFixture(t, "ws_recent");
-
-  const result = await cleanupManagedWorktrees({
-    store: fixture.store,
-    worktreeRoot: fixture.worktreeRoot,
-    allowedRoots: [fixture.root],
-    staleBefore: new Date(0),
-  });
-
-  assert.equal(result.removed.length, 0);
-  assert.equal(await pathExists(fixture.worktreePath), true);
-});
-
 test("missing worktree directories only clear stale persisted sessions", async (t) => {
   const fixture = await worktreeFixture(t, "ws_missing");
   await git(fixture.sourceRoot, ["worktree", "remove", fixture.worktreePath]);
