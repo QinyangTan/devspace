@@ -37,6 +37,11 @@ const migrations: Migration[] = [
     name: "local-agent-effort-rename",
     up: migrateLocalAgentEffortRename,
   },
+  {
+    version: 7,
+    name: "workspace-recovery-state",
+    up: migrateWorkspaceRecoveryState,
+  },
 ];
 
 export function migrateDatabase(sqlite: Database.Database): void {
@@ -244,6 +249,15 @@ function migrateLocalAgentEffortRename(sqlite: Database.Database): void {
     return;
   }
   sqlite.exec("alter table local_agent_sessions rename column thinking to effort");
+}
+
+function migrateWorkspaceRecoveryState(sqlite: Database.Database): void {
+  const workspaceStateExists = sqlite
+    .prepare("select 1 from sqlite_master where type = 'table' and name = 'workspace_sessions'")
+    .get();
+  if (!workspaceStateExists) return;
+
+  addColumnIfMissing(sqlite, "workspace_sessions", "recovery_kind", "text");
 }
 
 function addColumnIfMissing(

@@ -7,6 +7,7 @@ import * as prompts from "@clack/prompts";
 import { getShellConfig } from "@earendil-works/pi-coding-agent";
 import { satisfies } from "semver";
 import { loadConfig } from "./config.js";
+import type { ServerConfig } from "./config.js";
 import { resolveCliWorkspaceContext } from "./cli-workspace.js";
 import {
   getLocalAgentProviderAvailabilitySnapshot,
@@ -52,12 +53,15 @@ import {
 import { expandHomePath } from "./roots.js";
 import { readReviewRef } from "./review-checkpoints.js";
 import { shutdownHttpServer } from "./server-shutdown.js";
+import { logEvent } from "./logger.js";
+import { pruneStaleManagedWorktrees } from "./worktree-prune.js";
 
 type Command =
   | "serve"
   | "init"
   | "doctor"
   | "config"
+  | "worktrees"
   | "agents"
   | "show-changes"
   | "help"
@@ -85,6 +89,9 @@ async function main(argv: string[]): Promise<void> {
     case "config":
       runConfigCommand(args);
       return;
+    case "worktrees":
+      await runWorktreesCommand(args);
+      return;
     case "agents":
       await runAgentsCommand(args);
       return;
@@ -106,6 +113,7 @@ function normalizeCommand(command: string | undefined): Command {
     command === "init"
     || command === "doctor"
     || command === "config"
+    || command === "worktrees"
     || command === "agents"
     || command === "show-changes"
   ) return command;
@@ -307,8 +315,9 @@ async function serve(): Promise<void> {
     );
   }
 
-  const { createServer } = await import("./server.js");
   const config = loadConfig();
+  await runStartupWorktreeCleanup(config);
+  const { createServer } = await import("./server.js");
   const { app, close, localAgentProviders } = createServer(config);
   const httpServer = app.listen(config.port, config.host, () => {
     console.log(`devspace listening on http://${config.host}:${config.port}/mcp`);
@@ -338,6 +347,41 @@ async function serve(): Promise<void> {
   };
   process.once("SIGINT", handleShutdown);
   process.once("SIGTERM", handleShutdown);
+}
+
+async function runStartupWorktreeCleanup(config: ServerConfig): Promise<void> {
+  try {
+    const cleanup = await pruneStaleManagedWorktrees(config);
+    if (cleanup.isErr()) {
+      logEvent(config.logging, "warn", "managed_worktree_cleanup_failed", {
+        error: cleanup.error.message,
+        operation: cleanup.error.operation,
+      });
+      return;
+    }
+
+    const result = cleanup.value;
+    const preserved = result.removed.filter((entry) => entry.recoveryRef).length;
+    if (result.removed.length > 0 || result.missing.length > 0 || result.skipped.length > 0) {
+      logEvent(config.logging, "info", "managed_worktree_cleanup", {
+        removed: result.removed.length,
+        recoveryRefs: preserved,
+        missingSessions: result.missing.length,
+        skippedUntracked: result.skipped.length,
+      });
+    }
+    for (const failure of result.failed) {
+      logEvent(config.logging, "warn", "managed_worktree_cleanup_failed", {
+        workspaceId: failure.workspaceId,
+        error: failure.error.message,
+        operation: failure.error.operation,
+      });
+    }
+  } catch (error) {
+    logEvent(config.logging, "warn", "managed_worktree_cleanup_failed", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
 
 async function runDoctor(): Promise<void> {
@@ -397,6 +441,35 @@ function runConfigCommand(args: string[]): void {
   console.log(`Updated ${files.configPath}`);
 }
 
+async function runWorktreesCommand(args: string[]): Promise<void> {
+  const [subcommand, ...extra] = args;
+  if (subcommand !== "prune" || extra.length > 0) {
+    throw new Error("Usage: devspace worktrees prune");
+  }
+
+  const cleanup = await pruneStaleManagedWorktrees(loadConfig());
+  if (cleanup.isErr()) {
+    console.warn(`Failed to prune managed worktrees: ${cleanup.error.message}`);
+    process.exitCode = 1;
+    return;
+  }
+
+  const result = cleanup.value;
+  const preserved = result.removed.filter((entry) => entry.recoveryRef).length;
+  console.log(`Pruned ${result.removed.length} stale managed worktree${result.removed.length === 1 ? "" : "s"}.`);
+  if (preserved > 0) console.log(`Preserved ${preserved} recovery ref${preserved === 1 ? "" : "s"}.`);
+  if (result.missing.length > 0) {
+    console.log(`Cleared ${result.missing.length} missing worktree session${result.missing.length === 1 ? "" : "s"}.`);
+  }
+  if (result.skipped.length > 0) {
+    console.log(`Skipped ${result.skipped.length} worktree${result.skipped.length === 1 ? "" : "s"} with untracked files.`);
+  }
+  for (const failure of result.failed) {
+    console.warn(`Failed to prune ${failure.workspaceId}: ${failure.error.message}`);
+  }
+  if (result.failed.length > 0) process.exitCode = 1;
+}
+
 function printHelp(): void {
   console.log(
     [
@@ -409,6 +482,7 @@ function printHelp(): void {
       "  devspace doctor          Show config, runtime, and native dependency status",
       "  devspace config get      Print persisted config",
       "  devspace config set publicBaseUrl <url|null>",
+      "  devspace worktrees prune Prune managed worktrees unused for 3 days",
       "  devspace show-changes <review-ref> [--json]",
       "  devspace agents ls       List subagent sessions",
       "  devspace agents run <profile-or-provider> [--model <model>] [--effort <level>] <prompt>",
