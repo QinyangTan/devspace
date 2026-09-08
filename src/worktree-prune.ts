@@ -18,13 +18,18 @@ export async function pruneStaleManagedWorktrees(
   const opened = createWorkspaceStoreResult(config.stateDir);
   if (opened.isErr()) return opened;
 
-  const result = await cleanupManagedWorktrees({
-    store: opened.value,
-    worktreeRoot: config.worktreeRoot,
-    allowedRoots: config.allowedRoots,
-    staleBefore: new Date(now.getTime() - DEFAULT_MANAGED_WORKTREE_RETENTION_MS),
-  });
-  const closed = closeWorkspaceStoreResult(opened.value);
+  let result!: BetterResult<ManagedWorktreeCleanupResult, WorkspaceStoreError>;
+  let closed!: BetterResult<void, WorkspaceStoreError>;
+  try {
+    result = await cleanupManagedWorktrees({
+      store: opened.value,
+      worktreeRoot: config.worktreeRoot,
+      allowedRoots: config.allowedRoots,
+      staleBefore: new Date(now.getTime() - DEFAULT_MANAGED_WORKTREE_RETENTION_MS),
+    });
+  } finally {
+    closed = closeWorkspaceStoreResult(opened.value);
+  }
   if (result.isErr()) return result;
   if (closed.isErr()) return closed;
   return result;

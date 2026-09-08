@@ -350,30 +350,36 @@ async function serve(): Promise<void> {
 }
 
 async function runStartupWorktreeCleanup(config: ServerConfig): Promise<void> {
-  const cleanup = await pruneStaleManagedWorktrees(config);
-  if (cleanup.isErr()) {
-    logEvent(config.logging, "warn", "managed_worktree_cleanup_failed", {
-      error: cleanup.error.message,
-      operation: cleanup.error.operation,
-    });
-    return;
-  }
+  try {
+    const cleanup = await pruneStaleManagedWorktrees(config);
+    if (cleanup.isErr()) {
+      logEvent(config.logging, "warn", "managed_worktree_cleanup_failed", {
+        error: cleanup.error.message,
+        operation: cleanup.error.operation,
+      });
+      return;
+    }
 
-  const result = cleanup.value;
-  const preserved = result.removed.filter((entry) => entry.recoveryRef).length;
-  if (result.removed.length > 0 || result.missing.length > 0 || result.skipped.length > 0) {
-    logEvent(config.logging, "info", "managed_worktree_cleanup", {
-      removed: result.removed.length,
-      recoveryRefs: preserved,
-      missingSessions: result.missing.length,
-      skippedUntracked: result.skipped.length,
-    });
-  }
-  for (const failure of result.failed) {
+    const result = cleanup.value;
+    const preserved = result.removed.filter((entry) => entry.recoveryRef).length;
+    if (result.removed.length > 0 || result.missing.length > 0 || result.skipped.length > 0) {
+      logEvent(config.logging, "info", "managed_worktree_cleanup", {
+        removed: result.removed.length,
+        recoveryRefs: preserved,
+        missingSessions: result.missing.length,
+        skippedUntracked: result.skipped.length,
+      });
+    }
+    for (const failure of result.failed) {
+      logEvent(config.logging, "warn", "managed_worktree_cleanup_failed", {
+        workspaceId: failure.workspaceId,
+        error: failure.error.message,
+        operation: failure.error.operation,
+      });
+    }
+  } catch (error) {
     logEvent(config.logging, "warn", "managed_worktree_cleanup_failed", {
-      workspaceId: failure.workspaceId,
-      error: failure.error.message,
-      operation: failure.error.operation,
+      error: error instanceof Error ? error.message : String(error),
     });
   }
 }
