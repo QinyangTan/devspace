@@ -53,10 +53,13 @@ function registerClaudeMutationTools(context: ToolRegistrationContext): void {
           .describe("File path to write, relative to the workspace root."),
         content: z.string().describe("Complete new file content."),
         expectedBeforeHash: z
-          .string()
+          .union([
+            z.string().regex(/^sha256:[0-9a-f]{64}$/),
+            z.literal("missing"),
+          ])
           .optional()
           .describe(
-            "Optional precondition: sha256:<hex> for the current file contents, or 'missing' if the file must not exist.",
+            "Optional precondition: sha256:<64 lowercase hex> for the current file contents, or 'missing' if the file must not exist.",
           ),
       },
       outputSchema: resultOutputSchema(),
@@ -127,9 +130,10 @@ function registerClaudeMutationTools(context: ToolRegistrationContext): void {
           .min(1),
         expectedBeforeHash: z
           .string()
+          .regex(/^sha256:[0-9a-f]{64}$/)
           .optional()
           .describe(
-            "Optional precondition: sha256:<hex> for the current file contents.",
+            "Optional precondition: sha256:<64 lowercase hex> for the current file contents.",
           ),
       },
       outputSchema: resultOutputSchema({
@@ -161,11 +165,6 @@ function registerClaudeMutationTools(context: ToolRegistrationContext): void {
         return response;
       }
 
-      const stats = countDiffStats(
-        response.details?.patch ?? response.details?.diff,
-      );
-      const editResultText = `Edited ${input.path} (+${stats.additions} -${stats.removals}).`;
-      const editContent = [textBlock(editResultText)];
       logToolCall(config, {
         tool: toolNames.edit,
         workspaceId,
@@ -174,11 +173,20 @@ function registerClaudeMutationTools(context: ToolRegistrationContext): void {
         durationMs: Math.round(performance.now() - startedAt),
       });
 
+      const result = contentText(response.content);
+      const { additions, deletions } = countDiffStats(response.details?.diff);
+      const summaryParts = [`Changed ${input.path}`, `(+${additions} -${deletions})`];
+
       return {
-        content: editContent,
+        ...response,
+        content: [
+          textBlock(
+            `${summaryParts.join(" ")}\n\n${result}`,
+          ),
+        ],
         structuredContent: {
-          status: "applied",
-          result: contentText(editContent),
+          result,
+          status: "applied" as const,
         },
       };
     },
@@ -187,42 +195,29 @@ function registerClaudeMutationTools(context: ToolRegistrationContext): void {
 
 function registerShellTool(context: ToolRegistrationContext): void {
   const { server, config, workspaces } = context;
-
   server.registerTool(
     toolNames.shell,
     {
-      title: "Bash",
+      title: "Run shell",
       description: CLAUDE_SHELL_DESCRIPTION,
       inputSchema: {
         workspaceId: z.string().describe(workspaceIdDescription),
-        command: z
-          .string()
-          .describe("Shell command to execute."),
-        workingDirectory: z
-          .string()
-          .optional()
-          .describe(
-            "Optional working directory relative to the workspace root. Defaults to the workspace root.",
-          ),
+        command: z.string().describe("Shell command to run."),
         timeout: z
           .number()
+          .int()
           .positive()
-          .max(300)
           .optional()
-          .describe("Timeout in seconds. Defaults to 30, max 300."),
+          .describe("Optional timeout in seconds, capped at 300."),
       },
       outputSchema: resultOutputSchema(),
       annotations: SHELL_TOOL_ANNOTATIONS,
     },
-    async ({ workspaceId, workingDirectory, ...input }) => {
+    async ({ workspaceId, ...input }) => {
       const startedAt = performance.now();
       const workspace = await workspaces.getWorkspace(workspaceId);
-      const cwd = workspaces.resolveWorkingDirectory(
-        workspace,
-        workingDirectory,
-      );
       const response = await runShellTool(input, {
-        cwd,
+        cwd: workspace.root,
         root: workspace.root,
       });
 
@@ -232,9 +227,6 @@ function registerShellTool(context: ToolRegistrationContext): void {
           {
             tool: toolNames.shell,
             workspaceId,
-            workingDirectory: workingDirectory ?? ".",
-            command: input.command,
-            commandLength: input.command.length,
           },
           response.content,
           startedAt,
@@ -245,9 +237,6 @@ function registerShellTool(context: ToolRegistrationContext): void {
       logToolCall(config, {
         tool: toolNames.shell,
         workspaceId,
-        workingDirectory: workingDirectory ?? ".",
-        command: input.command,
-        commandLength: input.command.length,
         success: true,
         durationMs: Math.round(performance.now() - startedAt),
       });

@@ -69,3 +69,61 @@ test("editFileTool rejects an edit after the file diverges", async (t) => {
   assert.equal(response.isError, true);
   assert.equal(await readFile(path, "utf8"), "beta\n");
 });
+
+test("writeFileTool rejects an explicitly empty precondition", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "devspace-precondition-empty-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const path = join(root, "note.txt");
+  await writeFile(path, "current\n");
+
+  const response = await writeFileTool(
+    { path: "note.txt", content: "overwrite\n" },
+    { cwd: root, root, expectedBeforeHash: "" },
+  );
+
+  assert.equal(response.isError, true);
+  assert.equal(await readFile(path, "utf8"), "current\n");
+});
+
+test("writeFileTool serializes validation with concurrent mutations", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "devspace-precondition-concurrent-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const path = join(root, "note.txt");
+  await writeFile(path, "before\n");
+
+  let signalChecked!: () => void;
+  const checked = new Promise<void>((resolve) => {
+    signalChecked = resolve;
+  });
+  let releaseFirst!: () => void;
+  const holdFirst = new Promise<void>((resolve) => {
+    releaseFirst = resolve;
+  });
+
+  const first = writeFileTool(
+    { path: "note.txt", content: "first\n" },
+    {
+      cwd: root,
+      root,
+      expectedBeforeHash: hash("before\n"),
+      afterPreconditionCheck: async () => {
+        signalChecked();
+        await holdFirst;
+      },
+    },
+  );
+
+  await checked;
+
+  const second = writeFileTool(
+    { path: "note.txt", content: "second\n" },
+    { cwd: root, root, expectedBeforeHash: hash("before\n") },
+  );
+
+  releaseFirst();
+
+  const [firstResponse, secondResponse] = await Promise.all([first, second]);
+  assert.equal(firstResponse.isError, undefined);
+  assert.equal(secondResponse.isError, true);
+  assert.equal(await readFile(path, "utf8"), "first\n");
+});

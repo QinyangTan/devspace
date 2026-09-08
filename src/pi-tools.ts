@@ -26,7 +26,10 @@ interface ToolContext {
   root: string;
   readRoots?: string[];
   expectedBeforeHash?: string;
+  afterPreconditionCheck?: () => Promise<void>;
 }
+
+const fileMutationQueues = new Map<string, Promise<void>>();
 
 function toMcpContent(result: AgentToolResult<unknown>): McpContent[] {
   return result.content.map((content) => {
@@ -76,30 +79,56 @@ export async function readFileTool(input: ReadToolInput, context: ToolContext): 
 
 export async function writeFileTool(input: WriteToolInput, context: ToolContext): Promise<ToolResponse> {
   const path = resolveAllowedPath(input.path, context.cwd, [context.root]);
-  const preconditionError = await checkExpectedBeforeHash(path, context.expectedBeforeHash);
-  if (preconditionError) return { content: formatToolError(preconditionError), isError: true };
-  const tool = createWriteTool(context.cwd);
 
-  return runTool((params) => tool.execute("write_file", params), {
-    path,
-    content: input.content,
-  }, context);
+  return withFileMutationLock(path, async () => {
+    const preconditionError = await checkExpectedBeforeHash(path, context.expectedBeforeHash);
+    if (preconditionError) return { content: formatToolError(preconditionError), isError: true };
+    await context.afterPreconditionCheck?.();
+    const tool = createWriteTool(context.cwd);
+
+    return runTool((params) => tool.execute("write_file", params), {
+      path,
+      content: input.content,
+    }, context);
+  });
 }
 
 export async function editFileTool(input: EditToolInput, context: ToolContext): Promise<ToolResponse<EditToolDetails>> {
   const path = resolveAllowedPath(input.path, context.cwd, [context.root]);
-  const preconditionError = await checkExpectedBeforeHash(path, context.expectedBeforeHash);
-  if (preconditionError) return { content: formatToolError(preconditionError), isError: true };
-  const tool = createEditTool(context.cwd);
 
-  return runTool((params) => tool.execute("edit_file", params), {
-    path,
-    edits: input.edits,
-  }, context);
+  return withFileMutationLock(path, async () => {
+    const preconditionError = await checkExpectedBeforeHash(path, context.expectedBeforeHash);
+    if (preconditionError) return { content: formatToolError(preconditionError), isError: true };
+    await context.afterPreconditionCheck?.();
+    const tool = createEditTool(context.cwd);
+
+    return runTool((params) => tool.execute("edit_file", params), {
+      path,
+      edits: input.edits,
+    }, context);
+  });
+}
+
+async function withFileMutationLock<T>(path: string, mutation: () => Promise<T>): Promise<T> {
+  const previous = fileMutationQueues.get(path) ?? Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const tail = previous.then(() => current);
+  fileMutationQueues.set(path, tail);
+
+  await previous;
+  try {
+    return await mutation();
+  } finally {
+    release();
+    if (fileMutationQueues.get(path) === tail) fileMutationQueues.delete(path);
+  }
 }
 
 async function checkExpectedBeforeHash(path: string, expectedBeforeHash: string | undefined): Promise<Error | undefined> {
-  if (!expectedBeforeHash) return undefined;
+  if (expectedBeforeHash === undefined) return undefined;
   const actual = await fileContentHash(path);
   if (actual === expectedBeforeHash) return undefined;
   return new Error(`File precondition failed: expected ${expectedBeforeHash}, found ${actual}.`);
