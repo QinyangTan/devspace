@@ -165,6 +165,11 @@ function registerClaudeMutationTools(context: ToolRegistrationContext): void {
         return response;
       }
 
+      const stats = countDiffStats(
+        response.details?.patch ?? response.details?.diff,
+      );
+      const editResultText = `Edited ${input.path} (+${stats.additions} -${stats.removals}).`;
+      const editContent = [textBlock(editResultText)];
       logToolCall(config, {
         tool: toolNames.edit,
         workspaceId,
@@ -173,20 +178,11 @@ function registerClaudeMutationTools(context: ToolRegistrationContext): void {
         durationMs: Math.round(performance.now() - startedAt),
       });
 
-      const result = contentText(response.content);
-      const { additions, deletions } = countDiffStats(response.details?.diff);
-      const summaryParts = [`Changed ${input.path}`, `(+${additions} -${deletions})`];
-
       return {
-        ...response,
-        content: [
-          textBlock(
-            `${summaryParts.join(" ")}\n\n${result}`,
-          ),
-        ],
+        content: editContent,
         structuredContent: {
-          result,
-          status: "applied" as const,
+          status: "applied",
+          result: contentText(editContent),
         },
       };
     },
@@ -195,29 +191,42 @@ function registerClaudeMutationTools(context: ToolRegistrationContext): void {
 
 function registerShellTool(context: ToolRegistrationContext): void {
   const { server, config, workspaces } = context;
+
   server.registerTool(
     toolNames.shell,
     {
-      title: "Run shell",
+      title: "Bash",
       description: CLAUDE_SHELL_DESCRIPTION,
       inputSchema: {
         workspaceId: z.string().describe(workspaceIdDescription),
-        command: z.string().describe("Shell command to run."),
+        command: z
+          .string()
+          .describe("Shell command to execute."),
+        workingDirectory: z
+          .string()
+          .optional()
+          .describe(
+            "Optional working directory relative to the workspace root. Defaults to the workspace root.",
+          ),
         timeout: z
           .number()
-          .int()
           .positive()
+          .max(300)
           .optional()
-          .describe("Optional timeout in seconds, capped at 300."),
+          .describe("Timeout in seconds. Defaults to 30, max 300."),
       },
       outputSchema: resultOutputSchema(),
       annotations: SHELL_TOOL_ANNOTATIONS,
     },
-    async ({ workspaceId, ...input }) => {
+    async ({ workspaceId, workingDirectory, ...input }) => {
       const startedAt = performance.now();
       const workspace = await workspaces.getWorkspace(workspaceId);
+      const cwd = workspaces.resolveWorkingDirectory(
+        workspace,
+        workingDirectory,
+      );
       const response = await runShellTool(input, {
-        cwd: workspace.root,
+        cwd,
         root: workspace.root,
       });
 
@@ -227,6 +236,9 @@ function registerShellTool(context: ToolRegistrationContext): void {
           {
             tool: toolNames.shell,
             workspaceId,
+            workingDirectory: workingDirectory ?? ".",
+            command: input.command,
+            commandLength: input.command.length,
           },
           response.content,
           startedAt,
@@ -237,6 +249,9 @@ function registerShellTool(context: ToolRegistrationContext): void {
       logToolCall(config, {
         tool: toolNames.shell,
         workspaceId,
+        workingDirectory: workingDirectory ?? ".",
+        command: input.command,
+        commandLength: input.command.length,
         success: true,
         durationMs: Math.round(performance.now() - startedAt),
       });
