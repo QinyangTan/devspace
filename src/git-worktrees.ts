@@ -350,12 +350,22 @@ async function cleanupManagedWorktree(input: {
     allowedRoots: input.allowedRoots,
   });
   if (restored.isErr()) {
+    const markedAfterRestoreFailure = input.store.markSessionPruned(
+      session.id,
+      prepared.value.recoveryKind,
+    );
     return Result.err(worktreeError(
       session.id,
       "WORKTREE_RESTORE_FAILED",
       "prune_compensation",
       `Failed to persist pruning for ${session.id} and could not restore its removed worktree.`,
-      { persistence: markedPruned.error, restore: restored.error },
+      {
+        persistence: markedPruned.error,
+        restore: restored.error,
+        fallbackPersistence: markedAfterRestoreFailure.isErr()
+          ? markedAfterRestoreFailure.error
+          : undefined,
+      },
     ));
   }
   return Result.err(markedPruned.error);

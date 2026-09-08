@@ -367,7 +367,18 @@ export class WorkspaceRegistry {
         worktreeRoot: this.config.worktreeRoot,
         allowedRoots: this.config.allowedRoots,
       });
-      if (discarded.isErr()) return discarded;
+      if (discarded.isErr()) {
+        return Result.err(new ManagedWorktreeError({
+          code: "WORKTREE_RESTORE_FAILED",
+          workspaceId: session.id,
+          operation: "reactivate",
+          message: `Restored workspace ${session.id}, but its persisted session could not be reactivated and the restored worktree could not be discarded.`,
+          cause: {
+            reactivate: reactivated.isErr() ? reactivated.error : undefined,
+            discard: discarded.error,
+          },
+        }));
+      }
       if (reactivated.isErr()) return reactivated;
       return Result.err(new ManagedWorktreeError({
         code: "WORKTREE_RESTORE_FAILED",

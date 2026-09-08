@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { platform } from "node:os";
 import { tmpdir } from "node:os";
@@ -215,6 +215,55 @@ test("prune persistence failure restores the removed worktree", async (t) => {
   assert.equal(await pathExists(fixture.worktreePath), true);
   assert.equal(await git(fixture.worktreePath, ["status", "--short"]), "M README.md");
   assert.equal(fixture.store.getSession("ws_store_failure")?.status, "active");
+});
+
+test("failed prune compensation leaves the session pruned for later recovery", async (t) => {
+  class FailOnceAndBreakRecoveryStore extends SqliteWorkspaceStore {
+    sourceRoot?: string;
+    private failNextPrune = true;
+
+    override markSessionPruned(
+      id: string,
+      recoveryKind?: WorkspaceRecoveryKind,
+    ): BetterResult<void, WorkspaceStoreError> {
+      if (this.failNextPrune) {
+        this.failNextPrune = false;
+        assert.ok(this.sourceRoot);
+        execFileSync("git", ["update-ref", "-d", managedWorktreeRecoveryRef(id)], {
+          cwd: this.sourceRoot,
+        });
+        return Result.err(new WorkspaceStoreError(
+          "mark_session_pruned",
+          new Error("injected persistence failure"),
+          id,
+        ));
+      }
+      return super.markSessionPruned(id, recoveryKind);
+    }
+  }
+
+  let store!: FailOnceAndBreakRecoveryStore;
+  const fixture = await worktreeFixture(t, "ws_failed_compensation", {
+    createStore: (stateDir) => {
+      store = new FailOnceAndBreakRecoveryStore(stateDir);
+      return store;
+    },
+  });
+  store.sourceRoot = fixture.sourceRoot;
+  await writeFile(join(fixture.worktreePath, "README.md"), "recover later\n");
+
+  const result = unwrap(await cleanupManagedWorktrees({
+    store: fixture.store,
+    worktreeRoot: fixture.worktreeRoot,
+    allowedRoots: [fixture.root],
+    staleBefore: futureCutoff(),
+  }));
+
+  assert.equal(result.failed.length, 1);
+  assert.equal(ManagedWorktreeError.is(result.failed[0]?.error), true);
+  assert.equal(await pathExists(fixture.worktreePath), false);
+  assert.equal(fixture.store.getSession("ws_failed_compensation")?.status, "pruned");
+  assert.equal(fixture.store.getSession("ws_failed_compensation")?.recoveryKind, "stash");
 });
 
 test("cleanup rejects a managed worktree path replaced by a symlink", { skip: platform() === "win32" }, async (t) => {
