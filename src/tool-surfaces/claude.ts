@@ -52,17 +52,24 @@ function registerClaudeMutationTools(context: ToolRegistrationContext): void {
           .string()
           .describe("File path to write, relative to the workspace root."),
         content: z.string().describe("Complete new file content."),
+        expectedBeforeHash: z
+          .string()
+          .optional()
+          .describe(
+            "Optional precondition: sha256:<hex> for the current file contents, or 'missing' if the file must not exist.",
+          ),
       },
       outputSchema: resultOutputSchema(),
       annotations: WRITE_TOOL_ANNOTATIONS,
     },
-    async ({ workspaceId, ...input }) => {
+    async ({ workspaceId, expectedBeforeHash, ...input }) => {
       const startedAt = performance.now();
       const workspace = await workspaces.getWorkspace(workspaceId);
       workspaces.resolvePath(workspace, input.path);
       const response = await writeFileTool(input, {
         cwd: workspace.root,
         root: workspace.root,
+        expectedBeforeHash,
       });
 
       if (response.isError) {
@@ -118,19 +125,26 @@ function registerClaudeMutationTools(context: ToolRegistrationContext): void {
             }),
           )
           .min(1),
+        expectedBeforeHash: z
+          .string()
+          .optional()
+          .describe(
+            "Optional precondition: sha256:<hex> for the current file contents.",
+          ),
       },
       outputSchema: resultOutputSchema({
         status: z.literal("applied"),
       }),
       annotations: EDIT_TOOL_ANNOTATIONS,
     },
-    async ({ workspaceId, ...input }) => {
+    async ({ workspaceId, expectedBeforeHash, ...input }) => {
       const startedAt = performance.now();
       const workspace = await workspaces.getWorkspace(workspaceId);
       workspaces.resolvePath(workspace, input.path);
       const response = await editFileTool(input, {
         cwd: workspace.root,
         root: workspace.root,
+        expectedBeforeHash,
       });
 
       if (response.isError) {
