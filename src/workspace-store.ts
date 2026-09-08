@@ -9,7 +9,7 @@ import {
 } from "./db/schema.js";
 
 export type WorkspaceMode = "checkout" | "worktree";
-export type WorkspaceStatus = "active" | "pruned";
+export type WorkspaceStatus = "active" | "inactive" | "pruned";
 export type WorkspaceRecoveryKind = "head" | "stash";
 
 export class WorkspaceStoreError extends TaggedError("WorkspaceStoreError")<{
@@ -346,7 +346,7 @@ function rowToWorkspaceSession(row: WorkspaceSessionRow): WorkspaceSession {
 }
 
 function readWorkspaceStatus(status: string): WorkspaceStatus {
-  if (status === "active" || status === "pruned") return status;
+  if (status === "active" || status === "inactive" || status === "pruned") return status;
   throw new Error(`Unknown workspace session status: ${status}`);
 }
 
