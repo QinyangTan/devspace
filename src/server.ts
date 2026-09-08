@@ -44,6 +44,7 @@ import { createReviewCheckpointManager } from "./review-checkpoints.js";
 import { conversationScopeIdFromRequestMeta } from "./request-meta.js";
 import { shutdownHttpServer } from "./server-shutdown.js";
 import { formatPathForPrompt } from "./skills.js";
+import { DEVSPACE_VERSION } from "./version.js";
 import { createWorkspaceStore } from "./workspace-store.js";
 import { formatAgentsPath, WorkspaceRegistry } from "./workspaces.js";
 import {
@@ -78,7 +79,7 @@ function mcpServerInfo() {
   return {
     name: "devspace",
     title: "DevSpace",
-    version: "0.1.0",
+    version: DEVSPACE_VERSION,
     description:
       "Coding tools for project workspaces. Open each project or worktree once, then reuse its workspaceId.",
   };
