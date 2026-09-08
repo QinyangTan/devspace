@@ -191,88 +191,51 @@ export async function restoreManagedWorktree(input: {
   }
   const sourceRootPath = session.sourceRoot;
 
-  return Result.gen(async function* () {
-    const worktreePath = yield* worktreeResult(
+  const recoveryRef = managedWorktreeRecoveryRef(session.id);
+  const restoreRef = session.recoveryKind === "stash"
+    ? `${recoveryRef}^1`
+    : session.recoveryKind === "head"
+      ? recoveryRef
+      : session.baseSha;
+  if (!restoreRef) {
+    return Result.err(worktreeError(
       session.id,
-      "WORKTREE_PATH_INVALID",
-      "restore_path",
-      () => assertAllowedPath(session.root, [input.worktreeRoot]),
-    );
-    const exists = yield* Result.await(worktreePromiseResult(
-      session.id,
-      "WORKTREE_PATH_INVALID",
-      "restore_path",
-      () => isDirectory(worktreePath),
+      "WORKTREE_INVALID_STATE",
+      "restore",
+      `Cannot restore workspace ${session.id} because its base commit is unknown.`,
     ));
-    if (exists) {
-      return Result.err(worktreeError(
-        session.id,
-        "WORKTREE_PATH_INVALID",
-        "restore_path",
-        `Cannot restore workspace ${session.id} because its worktree path already exists.`,
-      ));
+  }
+
+  return captureManagedWorktreeResult(session.id, "restore", async () => {
+    const worktreePath = assertAllowedPath(session.root, [input.worktreeRoot]);
+    if (await isDirectory(worktreePath)) {
+      throw new Error(`Cannot restore workspace ${session.id} because its worktree path already exists.`);
     }
 
-    const sourceRoot = yield* Result.await(worktreePromiseResult(
-      session.id,
-      "WORKTREE_PATH_INVALID",
-      "restore_source",
-      () => assertCleanupSourceRootAllowed(sourceRootPath, input.allowedRoots),
-    ));
-    yield* Result.await(worktreePromiseResult(
-      session.id,
-      "WORKTREE_RESTORE_FAILED",
-      "create_worktree_root",
-      () => mkdir(input.worktreeRoot, { recursive: true }).then(() => undefined),
-    ));
+    const sourceRoot = await assertCleanupSourceRootAllowed(sourceRootPath, input.allowedRoots);
+    await mkdir(input.worktreeRoot, { recursive: true });
 
-    const recoveryRef = managedWorktreeRecoveryRef(session.id);
-    const restoreRef = session.recoveryKind === "stash"
-      ? `${recoveryRef}^1`
-      : session.recoveryKind === "head"
-        ? recoveryRef
-        : session.baseSha;
-    if (!restoreRef) {
-      return Result.err(worktreeError(
-        session.id,
-        "WORKTREE_INVALID_STATE",
-        "restore_ref",
-        `Cannot restore workspace ${session.id} because its base commit is unknown.`,
-      ));
-    }
-
-    const created = await worktreePromiseResult(
-      session.id,
-      "WORKTREE_RESTORE_FAILED",
-      "git_worktree_add",
-      () => git(["worktree", "add", "--detach", worktreePath, restoreRef], sourceRoot),
-    );
-    if (created.isErr()) return created;
-
-    if (session.recoveryKind === "stash") {
-      const applied = await worktreePromiseResult(
-        session.id,
-        "WORKTREE_RESTORE_FAILED",
-        "git_stash_apply",
-        () => git(["stash", "apply", "--index", recoveryRef], worktreePath),
-      );
-      if (applied.isErr()) {
-        const discarded = await removeManagedWorktreeResult(session.id, sourceRoot, worktreePath);
-        if (discarded.isErr()) {
-          return Result.err(worktreeError(
-            session.id,
-            "WORKTREE_RESTORE_FAILED",
-            "restore_compensation",
-            `Failed to restore workspace ${session.id} and could not remove the partial worktree.`,
-            { restore: applied.error, cleanup: discarded.error },
-          ));
-        }
-        return applied;
+    let created = false;
+    try {
+      await git(["worktree", "add", "--detach", worktreePath, restoreRef], sourceRoot);
+      created = true;
+      if (session.recoveryKind === "stash") {
+        await git(["stash", "apply", "--index", recoveryRef], worktreePath);
       }
+    } catch (cause) {
+      if (created) {
+        try {
+          await git(["worktree", "remove", "--force", worktreePath], sourceRoot);
+        } catch (cleanupCause) {
+          throw new AggregateError(
+            [cause, cleanupCause],
+            `Failed to restore workspace ${session.id} and remove its partial worktree.`,
+          );
+        }
+      }
+      throw cause;
     }
-
-    return Result.ok(undefined);
-  });
+  }, "WORKTREE_RESTORE_FAILED");
 }
 
 export async function discardRestoredManagedWorktree(input: {
@@ -291,36 +254,14 @@ export async function discardRestoredManagedWorktree(input: {
   }
   const sourceRootPath = session.sourceRoot;
 
-  return Result.gen(async function* () {
-    const worktreePath = yield* worktreeResult(
-      session.id,
-      "WORKTREE_PATH_INVALID",
-      "discard_path",
-      () => assertAllowedPath(session.root, [input.worktreeRoot]),
-    );
-    const exists = yield* Result.await(worktreePromiseResult(
-      session.id,
-      "WORKTREE_PATH_INVALID",
-      "discard_path",
-      () => isDirectory(worktreePath),
-    ));
-    if (!exists) return Result.ok(undefined);
+  return captureManagedWorktreeResult(session.id, "discard", async () => {
+    const worktreePath = assertAllowedPath(session.root, [input.worktreeRoot]);
+    if (!(await isDirectory(worktreePath))) return;
 
-    const sourceRoot = yield* Result.await(worktreePromiseResult(
-      session.id,
-      "WORKTREE_PATH_INVALID",
-      "discard_source",
-      () => assertCleanupSourceRootAllowed(sourceRootPath, input.allowedRoots),
-    ));
-    yield* Result.await(worktreePromiseResult(
-      session.id,
-      "WORKTREE_PATH_INVALID",
-      "discard_path",
-      () => assertManagedWorktreePath(worktreePath, input.worktreeRoot),
-    ));
-    yield* Result.await(removeManagedWorktreeResult(session.id, sourceRoot, worktreePath));
-    return Result.ok(undefined);
-  });
+    const sourceRoot = await assertCleanupSourceRootAllowed(sourceRootPath, input.allowedRoots);
+    await assertManagedWorktreePath(worktreePath, input.worktreeRoot);
+    await git(["worktree", "remove", "--force", worktreePath], sourceRoot);
+  }, "WORKTREE_PATH_INVALID");
 }
 
 type CleanupOutcome =
@@ -338,79 +279,37 @@ async function cleanupManagedWorktree(input: {
   allowedRoots: string[];
 }): Promise<BetterResult<CleanupOutcome, ManagedWorktreeFeatureError>> {
   const { session } = input;
-  return Result.gen(async function* () {
-    const worktreePath = yield* worktreeResult(
-      session.id,
-      "WORKTREE_PATH_INVALID",
-      "prune_path",
-      () => assertAllowedPath(session.root, [input.worktreeRoot]),
-    );
-    const exists = yield* Result.await(worktreePromiseResult(
-      session.id,
-      "WORKTREE_PATH_INVALID",
-      "prune_path",
-      () => isDirectory(worktreePath),
-    ));
-    if (!exists) {
-      yield* input.store.deleteSession(session.id);
-      return Result.ok({ kind: "missing" } as const);
+
+  const prepared = await captureManagedWorktreeResult(session.id, "prune", async () => {
+    const worktreePath = assertAllowedPath(session.root, [input.worktreeRoot]);
+    if (!(await isDirectory(worktreePath))) {
+      return { kind: "missing" } as const;
     }
     if (!session.sourceRoot) {
-      return Result.err(worktreeError(
-        session.id,
-        "WORKTREE_INVALID_STATE",
-        "prune_source",
-        `Stored managed worktree is missing sourceRoot: ${session.id}`,
-      ));
+      throw new Error(`Stored managed worktree is missing sourceRoot: ${session.id}`);
     }
-    const sourceRootPath = session.sourceRoot;
 
-    const sourceRoot = yield* Result.await(worktreePromiseResult(
-      session.id,
-      "WORKTREE_PATH_INVALID",
-      "prune_source",
-      () => assertCleanupSourceRootAllowed(sourceRootPath, input.allowedRoots),
-    ));
-    yield* Result.await(worktreePromiseResult(
-      session.id,
-      "WORKTREE_PATH_INVALID",
-      "prune_path",
-      () => assertManagedWorktreePath(worktreePath, input.worktreeRoot),
-    ));
-
-    const status = yield* Result.await(worktreePromiseResult(
-      session.id,
-      "WORKTREE_GIT_FAILED",
-      "git_status",
-      () => git(["status", "--porcelain=v1", "--untracked-files=normal", "--ignored=no"], worktreePath),
-    ));
+    const sourceRoot = await assertCleanupSourceRootAllowed(session.sourceRoot, input.allowedRoots);
+    await assertManagedWorktreePath(worktreePath, input.worktreeRoot);
+    const status = await git(
+      ["status", "--porcelain=v1", "--untracked-files=normal", "--ignored=no"],
+      worktreePath,
+    );
     if (status.split("\n").some((line) => line.startsWith("?? "))) {
-      return Result.ok({ kind: "skipped" } as const);
+      return { kind: "skipped" } as const;
     }
 
     const hasTrackedChanges = status.trim().length > 0;
-    const headSha = (yield* Result.await(worktreePromiseResult(
-      session.id,
-      "WORKTREE_GIT_FAILED",
-      "git_rev_parse",
-      () => git(["rev-parse", "HEAD"], worktreePath),
-    ))).trim();
+    const headSha = (await git(["rev-parse", "HEAD"], worktreePath)).trim();
     let recoverySha: string | undefined;
     let recoveryKind: WorkspaceRecoveryKind | undefined;
     if (hasTrackedChanges) {
-      recoverySha = (yield* Result.await(worktreePromiseResult(
-        session.id,
-        "WORKTREE_SNAPSHOT_FAILED",
-        "git_stash_create",
-        () => git(["stash", "create", `DevSpace recovery ${session.id}`], worktreePath),
-      ))).trim();
+      recoverySha = (await git(
+        ["stash", "create", `DevSpace recovery ${session.id}`],
+        worktreePath,
+      )).trim();
       if (!recoverySha) {
-        return Result.err(worktreeError(
-          session.id,
-          "WORKTREE_SNAPSHOT_FAILED",
-          "git_stash_create",
-          `Git could not snapshot tracked changes for ${session.id}.`,
-        ));
+        throw new Error(`Git could not snapshot tracked changes for ${session.id}.`);
       }
       recoveryKind = "stash";
     } else if (!session.baseSha || headSha !== session.baseSha) {
@@ -420,45 +319,46 @@ async function cleanupManagedWorktree(input: {
 
     const recoveryRef = recoverySha ? managedWorktreeRecoveryRef(session.id) : undefined;
     if (recoveryRef && recoverySha) {
-      yield* Result.await(worktreePromiseResult(
-        session.id,
-        "WORKTREE_GIT_FAILED",
-        "git_update_recovery_ref",
-        () => git(["update-ref", recoveryRef, recoverySha!], sourceRoot),
-      ));
+      await git(["update-ref", recoveryRef, recoverySha], sourceRoot);
     }
 
     // Revalidate immediately before the only destructive filesystem operation.
-    yield* Result.await(worktreePromiseResult(
-      session.id,
-      "WORKTREE_PATH_INVALID",
-      "prune_path",
-      () => assertManagedWorktreePath(worktreePath, input.worktreeRoot),
-    ));
-    yield* Result.await(removeManagedWorktreeResult(session.id, sourceRoot, worktreePath));
-    const markedPruned = input.store.markSessionPruned(session.id, recoveryKind);
-    if (markedPruned.isErr()) {
-      const restored = await restoreManagedWorktree({
-        session: { ...session, recoveryKind },
-        worktreeRoot: input.worktreeRoot,
-        allowedRoots: input.allowedRoots,
-      });
-      if (restored.isErr()) {
-        return Result.err(worktreeError(
-          session.id,
-          "WORKTREE_RESTORE_FAILED",
-          "prune_compensation",
-          `Failed to persist pruning for ${session.id} and could not restore its removed worktree.`,
-          { persistence: markedPruned.error, restore: restored.error },
-        ));
-      }
-      return Result.err(markedPruned.error);
-    }
-    return Result.ok({
+    await assertManagedWorktreePath(worktreePath, input.worktreeRoot);
+    await git(["worktree", "remove", "--force", worktreePath], sourceRoot);
+    return {
       kind: "removed",
       entry: { workspaceId: session.id, recoveryRef, recoverySha },
-    } as const);
+      recoveryKind,
+    } as const;
   });
+  if (prepared.isErr()) return prepared;
+
+  if (prepared.value.kind === "missing") {
+    const deleted = input.store.deleteSession(session.id);
+    return deleted.isErr() ? deleted : Result.ok(prepared.value);
+  }
+  if (prepared.value.kind === "skipped") return Result.ok(prepared.value);
+
+  const markedPruned = input.store.markSessionPruned(session.id, prepared.value.recoveryKind);
+  if (markedPruned.isOk()) {
+    return Result.ok({ kind: "removed", entry: prepared.value.entry });
+  }
+
+  const restored = await restoreManagedWorktree({
+    session: { ...session, recoveryKind: prepared.value.recoveryKind },
+    worktreeRoot: input.worktreeRoot,
+    allowedRoots: input.allowedRoots,
+  });
+  if (restored.isErr()) {
+    return Result.err(worktreeError(
+      session.id,
+      "WORKTREE_RESTORE_FAILED",
+      "prune_compensation",
+      `Failed to persist pruning for ${session.id} and could not restore its removed worktree.`,
+      { persistence: markedPruned.error, restore: restored.error },
+    ));
+  }
+  return Result.err(markedPruned.error);
 }
 
 function worktreeError(
@@ -471,31 +371,11 @@ function worktreeError(
   return new ManagedWorktreeError({ workspaceId, code, operation, message, cause });
 }
 
-function worktreeResult<T>(
+async function captureManagedWorktreeResult<T>(
   workspaceId: string,
-  code: ManagedWorktreeErrorCode,
-  operation: string,
-  run: () => T,
-): BetterResult<T, ManagedWorktreeError> {
-  try {
-    return Result.ok(run());
-  } catch (cause) {
-    if (isProgrammerDefect(cause)) throw cause;
-    return Result.err(worktreeError(
-      workspaceId,
-      code,
-      operation,
-      cause instanceof Error ? cause.message : String(cause),
-      cause,
-    ));
-  }
-}
-
-async function worktreePromiseResult<T>(
-  workspaceId: string,
-  code: ManagedWorktreeErrorCode,
   operation: string,
   run: () => Promise<T>,
+  code: ManagedWorktreeErrorCode = "WORKTREE_GIT_FAILED",
 ): Promise<BetterResult<T, ManagedWorktreeError>> {
   try {
     return Result.ok(await run());
@@ -509,19 +389,6 @@ async function worktreePromiseResult<T>(
       cause,
     ));
   }
-}
-
-function removeManagedWorktreeResult(
-  workspaceId: string,
-  sourceRoot: string,
-  worktreePath: string,
-): Promise<BetterResult<string, ManagedWorktreeError>> {
-  return worktreePromiseResult(
-    workspaceId,
-    "WORKTREE_GIT_FAILED",
-    "git_worktree_remove",
-    () => git(["worktree", "remove", "--force", worktreePath], sourceRoot),
-  );
 }
 
 function isProgrammerDefect(error: unknown): boolean {
