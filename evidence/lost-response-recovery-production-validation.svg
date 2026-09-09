@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="680" viewBox="0 0 1400 680">
+  <rect width="1400" height="680" fill="#181a1f"/>
+  <style>
+    text { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; fill: #eef1f5; font-size: 22px; }
+    .title { font-size: 28px; font-weight: 700; }
+    .pass { fill: #8bd5a5; }
+    .muted { fill: #aeb6c2; }
+  </style>
+  <text x="36" y="52" class="title">DevSpace lost-response recovery validation</text>
+  <text x="36" y="92">PR #335 head: dd52b75e8d62dc3722bd134823ea8a873698604d</text>
+  <text x="36" y="126">Upstream main checked: 67d4c8f8fce08c171eea6f820a0ee090ae81c1d0</text>
+  <text x="36" y="176" class="pass">PASS  19 focused tests / 0 failed</text>
+  <text x="36" y="220">PASS  completed replay + in-flight join</text>
+  <text x="36" y="254">PASS  same operationId + changed payload fails closed</text>
+  <text x="36" y="288">PASS  write/edit/bash/apply_patch exact retry de-duplication</text>
+  <text x="36" y="322">PASS  exec_command retry recovers original session handle</text>
+  <text x="36" y="356">PASS  write_stdin retry does not duplicate process input</text>
+  <text x="36" y="390">PASS  newer external file state survives lost-response retry</text>
+  <text x="36" y="424">PASS  real HTTP socket destroyed after local file commit</text>
+  <text x="36" y="458">PASS  real HTTP socket destroyed after process start</text>
+  <text x="36" y="508" class="muted">Boundary: process-local recovery only; no tunnel reconnect;</text>
+  <text x="36" y="542" class="muted">no server-restart durability claim.</text>
+  <text x="36" y="592" class="muted">GitHub Actions: action_required, so no full CI pass is claimed.</text>
+</svg>
