@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1700" height="748" viewBox="0 0 1700 748">
+<rect width="100%" height="100%" fill="#15171b"/>
+<style>text{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:20px;fill:#e8ebef}.pass{fill:#a6e3a1}.verdict{fill:#f5d67b}</style>
+<text x="24" y="44" class="">DevSpace PR #303 sandbox verification</text>
+<text x="24" y="72" class="">Branch: luo-xingyu/devspace fix/model-facing-snake-case</text>
+<text x="24" y="100" class="">Head: 7c0259e8ac6b5e2f09e72c04e19e6e988a0f334a</text>
+<text x="24" y="128" class="">Date: 2026-09-09</text>
+<text x="24" y="156" class=""></text>
+<text x="24" y="184" class="">[Contract / process behavior]</text>
+<text x="24" y="212" class="pass">PASS | 30s yield keeps ~15s command in initial exec_command | elapsed=15048ms running=false</text>
+<text x="24" y="240" class="">session_id=none exit_code=0</text>
+<text x="24" y="268" class="pass">PASS | short yield returns session_id and write_stdin-style poll completes | initial_session_id=2</text>
+<text x="24" y="296" class="">final_running=false exit_code=0</text>
+<text x="24" y="324" class="pass">PASS | fault injection: local command survives lost initial MCP response |</text>
+<text x="24" y="352" class="">local_marker=LOCAL_OPERATION_COMPLETED caller_session_id=missing server_session_id_was=3</text>
+<text x="24" y="380" class="pass">PASS | no public rediscovery API in ProcessSessionManager |</text>
+<text x="24" y="408" class="">public_methods=consume,createSession,finish,getOwnedSession,removeSession,shutdown,start,startPipe,waitFo</text>
+<text x="24" y="436" class="">rExit,write</text>
+<text x="24" y="464" class=""></text>
+<text x="24" y="492" class="">[Mutation transport-loss fault injection]</text>
+<text x="24" y="520" class="pass">PASS | lost response after local mutation | client_error=UND_ERR_SOCKET local_file=agent-change</text>
+<text x="24" y="548" class="pass">PASS | blind retry can overwrite newer state when no version/precondition is supplied |</text>
+<text x="24" y="576" class="">newer-external-change -&gt; agent-change</text>
+<text x="24" y="604" class=""></text>
+<text x="24" y="632" class="verdict">Verdict:</text>
+<text x="24" y="660" class="verdict">#303 fixes the model-facing snake_case/yield contract and the normal session flow.</text>
+<text x="24" y="688" class="verdict">It does not by itself resolve the separate case where a local operation commits but the MCP response is</text>
+<text x="24" y="716" class="">lost; the caller can still lose the session handle or become uncertain whether a mutation committed.</text>
+</svg>
