@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1700" height="720" viewBox="0 0 1700 720">
+<rect width="100%" height="100%" fill="#15171b"/>
+<style>text{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:20px;fill:#e8ebef}.pass{fill:#a6e3a1}.note{fill:#f5d67b}</style>
+<text x="24" y="44">DevSpace lost-response fix validation</text>
+<text x="24" y="76">Baseline: upstream main 67d4c8f8fce08c171eea6f820a0ee090ae81c1d0</text>
+<text x="24" y="108">Validation: latest main + #335 file-mutation precondition fix</text>
+<text x="24" y="140">Focused test commit: 85eeeb2e15a9be4bc65b2fd2a3163011b8cb9733</text>
+<text x="24" y="188" class="pass">PASS  stale retry after lost mutation response fails closed</text>
+<text x="24" y="220" class="pass">PASS  matching content-hash precondition</text>
+<text x="24" y="252" class="pass">PASS  stale/missing-file preconditions</text>
+<text x="24" y="284" class="pass">PASS  edit after divergence is rejected</text>
+<text x="24" y="316" class="pass">PASS  explicitly empty precondition is rejected</text>
+<text x="24" y="348" class="pass">PASS  concurrent same-file validation is serialized</text>
+<text x="24" y="396" class="pass">Result: 6 passed, 0 failed</text>
+<text x="24" y="452" class="note">Narrowed verdict:</text>
+<text x="24" y="484" class="note">#335 prevents a stale retry from overwriting newer file state after an uncertain/lost response.</text>
+<text x="24" y="532">It fails closed when the original expected-before hash no longer matches.</text>
+<text x="24" y="580" class="note">Scope boundary:</text>
+<text x="24" y="612">This does not recover the original lost response or provide an operation receipt.</text>
+<text x="24" y="644">Actual DevSpace pi-tools.ts was compiled/executed in Node 22; external Pi file tools were minimally stubbed.</text>
+<text x="24" y="676">Targeted proxy verification, not a full dependency-backed repository CI run.</text>
+</svg>
