@@ -1,0 +1,31 @@
+DevSpace lost-response recovery validation
+
+PR: Waishnav/devspace#335
+Head: dd52b75e8d62dc3722bd134823ea8a873698604d
+Upstream main checked: 67d4c8f8fce08c171eea6f820a0ee090ae81c1d0
+
+Local Node 22 fault-injection suite: 19 passed, 0 failed
+
+Covered:
+- completed operation replay without a second side effect
+- in-flight duplicate joins the original operation
+- failure replay does not repeat a side effect
+- same operationId with changed payload fails closed
+- canonical request fingerprinting across object-key order
+- expired receipts compact to fail-closed tombstones
+- receipt capacity fails closed rather than evicting live recovery state
+- malformed operationId is rejected before execution
+- Claude-style write/edit/bash exact retry de-duplication
+- Codex apply_patch exact retry de-duplication
+- exec_command retry recovers the original session handle
+- write_stdin retry does not duplicate process input
+- lost write response preserves newer external file state
+- real HTTP response socket destroyed after local file commit, then safely replayed
+- real HTTP response socket destroyed after process start, then original session recovered
+
+Boundary:
+- process-local recovery only
+- no tunnel/transport reconnection logic
+- no server-restart durability claim
+
+GitHub Actions status for the fork PR: action_required (workflow did not execute), so this evidence does not claim a full dependency-backed GitHub CI pass.
