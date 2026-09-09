@@ -1,0 +1,23 @@
+DevSpace lost-response fix validation
+
+Baseline: upstream main 67d4c8f8fce08c171eea6f820a0ee090ae81c1d0
+Validation branch: latest main + #335 file-mutation precondition fix
+Focused test commit: 85eeeb2e15a9be4bc65b2fd2a3163011b8cb9733
+
+PASS  stale retry after lost mutation response fails closed
+PASS  matching content-hash precondition
+PASS  stale/missing-file preconditions
+PASS  edit after divergence is rejected
+PASS  explicitly empty precondition is rejected
+PASS  validation is serialized with concurrent same-file mutations
+
+Result: 6 passed, 0 failed
+
+Narrowed verdict:
+#335 protects against stale retry overwriting newer file state after an uncertain/lost mutation response. It fails closed as intended.
+
+Scope boundary:
+This does NOT recover the original lost response or provide an operation receipt. It is a safety primitive for the file-mutation retry case.
+
+Execution note:
+Actual DevSpace pi-tools.ts was compiled and executed in an isolated Node 22 sandbox. The external Pi file-tool package was minimally stubbed. This is targeted proxy verification, not a full dependency-backed repository CI run.
